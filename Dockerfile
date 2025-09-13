@@ -1,19 +1,25 @@
-FROM node:24-slim
+FROM python:3.11-slim
 
-RUN apt-get update \
-	&& apt-get install -y curl git \
-	&& curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-	&& chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-	&& apt-get update \
-	&& apt-get install -y gh \
-	&& rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ffmpeg \
+    git \
+    jq \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir /workspace
+# Install yt-dlp (via pip so it's always up to date)
+RUN pip install --no-cache-dir -U yt-dlp
 
-COPY deploy/.github /workspace/.github
+# Install ngrok
+RUN curl -s https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip -o ngrok.zip \
+    && unzip ngrok.zip \
+    && mv ngrok /usr/local/bin/ \
+    && rm ngrok.zip
 
+# Set working directory inside container
 WORKDIR /workspace
 
-# # Keep container running
-# CMD ["tail", "-f", "/dev/null"]
+# Expose the HTTP server port and ngrok API port
+EXPOSE 8000 4040

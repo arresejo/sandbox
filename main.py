@@ -1,3 +1,4 @@
+from typing import Optional
 from fastmcp import FastMCP
 from command_exec import run_subprocess, CommandError
 from datetime import datetime
@@ -11,6 +12,38 @@ import base64
 
 mcp = FastMCP("Sandbox")
 
+@mcp.tool(
+    name="get_workspace_public_url",
+    title="Get Workspace Public URL",
+    description="Start http.server + ngrok inside the sandbox container and return the public URL.",
+)
+async def get_workspace_public_url() -> dict:
+    await ensure_sandbox_exists()
+
+    # Start http.server in background (no --directory, no trailing &)
+    command_server = "docker exec -d sandbox python -m http.server 8000"
+    await run_subprocess(command_server, shell=True)
+
+    # Start ngrok in background (no trailing &)
+    command_ngrok = (
+        "docker exec -d sandbox "
+        "ngrok http 8000 --authtoken 32ed1S5ECXtWJt2An8iA2RgyAeD_78Ti6KXPwdm5pqugvgu2p --log=stdout"
+    )
+    await run_subprocess(command_ngrok, shell=True)
+    # Give ngrok a moment to initialize
+    import time, requests
+    time.sleep(3)
+
+    try:
+        # Query ngrok's local API inside container, port mapped to host
+        resp = requests.get("http://127.0.0.1:4040/api/tunnels")
+        tunnels = resp.json().get("tunnels", [])
+        if tunnels:
+            return {"is_error": False, "url": tunnels[0]["public_url"]}
+    except Exception as e:
+        return {"is_error": True, "message": str(e)}
+
+    return {"is_error": True, "message": "No public URL found"}
 
 @mcp.tool(
     title="List files in the sandbox",
@@ -205,92 +238,6 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
         "replacements": applied,
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
-
-
-# --- DEPLOY TOOL ---
-@mcp.tool(
-    name="deploy",
-    title="Deploy Sandbox to New GitHub Repo",
-    description="Creates a new GitHub repo using the gh CLI and pushes the contents of the sandbox to it. Requires the 'gh-api-key' Bearer header.",
-)
-async def deploy(
-    repo_name: str, visibility: str = "private", description: str = ""
-) -> dict:
-    """
-    Create a new GitHub repo and push the contents of the sandbox to it.
-    Args:
-        repo_name: Name for the new repository
-        visibility: 'private' or 'public' (default: private)
-        description: Optional repo description
-    Returns:
-        Dict with repo URL and status
-    """
-
-    await ensure_sandbox_exists()
-
-    # Get the GitHub API key from the Bearer header
-    # The MCP runtime should provide this in the tool call context
-    gh_token = mcp.context.headers.get("gh-api-key")
-    print("gh_token", gh_token)
-
-    if not gh_token:
-        return {
-            "is_error": True,
-            "message": "Missing GitHub API key in 'gh-api-key' header.",
-        }
-
-    # Prepare commands to run inside the container
-    # 1. Set up git config and gh auth
-    # 2. Create repo with gh
-    # 3. Initialize git, add, commit, push
-    commands = [
-        # Authenticate gh CLI
-        f"echo {quote(gh_token)} | gh auth login --with-token",
-        # Create the repo
-        f"gh repo create {quote(repo_name)} --{visibility} --description {quote(description)} --confirm",
-        # Initialize git if needed
-        "[ -d .git ] || git init",
-        # Set default branch
-        "git checkout -B main",
-        # Add all files
-        "git add .",
-        # Commit (ignore error if nothing to commit)
-        "git commit -m 'Initial commit from sandbox' || true",
-        # Set remote (force overwrite)
-        f"git remote remove origin 2>/dev/null || true; git remote add origin https://github.com/$(gh api user | jq -r .login)/{repo_name}.git",
-        # Push
-        "git push -u origin main --force",
-    ]
-    # Join commands with '&&' to fail fast
-    full_cmd = " && ".join(commands)
-    docker_cmd = f"docker exec sandbox sh -c {quote(full_cmd)}"
-
-    try:
-        result = await run_subprocess(docker_cmd, shell=True, timeout=120)
-        if result.code != 0:
-            return {
-                "is_error": True,
-                "message": result.stderr or "Failed to deploy repo.",
-                "exit_code": result.code,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        # Get username for repo URL
-        user_cmd = "docker exec sandbox gh api user --jq .login"
-        user_result = await run_subprocess(user_cmd, shell=True)
-        if user_result.code == 0 and user_result.stdout:
-            username = user_result.stdout.strip()
-            repo_url = f"https://github.com/{username}/{repo_name}"
-        else:
-            repo_url = f"https://github.com/unknown/{repo_name}"
-        return {
-            "repo_url": repo_url,
-            "status": "success",
-            "stdout": result.stdout,
-        }
-    except Exception as e:
-        return {"is_error": True, "message": f"Exception: {e}"}
-
 
 if __name__ == "__main__":
     mcp.run(
