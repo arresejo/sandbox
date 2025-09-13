@@ -4,7 +4,8 @@ from datetime import datetime
 from utils.init_sandbox import ensure_sandbox_exists
 from shlex import quote
 import os
-from fastmcp.server.dependencies import get_http_headers
+
+# from fastmcp.server.dependencies import get_http_headers
 
 # Use base64 to avoid shell escaping issues
 import base64
@@ -206,96 +207,6 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
         "replacements": applied,
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
-
-
-# --- DEPLOY TOOL ---
-# https://gofastmcp.com/servers/context#http-headers
-@mcp.tool(
-    title="Deploy Sandbox to New GitHub Repo",
-    description="Creates a new GitHub repo and pushes the contents of the sandbox to it.",
-)
-async def deploy_repo(
-    repo_name: str, visibility: str = "private", description: str = ""
-) -> dict:
-    """
-    Create a new GitHub repo and push the contents of the sandbox to it.
-    Args:
-        repo_name: Name for the new repository
-        visibility: 'private' or 'public' (default: private)
-        description: Optional repo description
-    Returns:
-        Dict with repo URL and status
-    """
-    print("DEPLOY CALLED")
-    await ensure_sandbox_exists()
-
-    # Get the GitHub API key from the Bearer header
-    # The MCP runtime should provide this in the tool call context
-    try:
-        headers = get_http_headers()
-        print("headers", headers)
-        gh_token = headers.get("gh-api-key")
-        print("gh_token", gh_token)
-    except Exception as e:
-        print(e)
-
-    if not gh_token:
-        return {
-            "is_error": True,
-            "message": "Missing GitHub API key in 'gh-api-key' header.",
-        }
-
-    # Prepare commands to run inside the container
-    # 1. Set up git config and gh auth
-    # 2. Create repo with gh
-    # 3. Initialize git, add, commit, push
-    commands = [
-        # Authenticate gh CLI
-        f"echo {quote(gh_token)} | gh auth login --with-token",
-        # Create the repo
-        f"gh repo create {quote(repo_name)} --{visibility} --description {quote(description)} --confirm",
-        # Initialize git if needed
-        "[ -d .git ] || git init",
-        # Set default branch
-        "git checkout -B main",
-        # Add all files
-        "git add .",
-        # Commit (ignore error if nothing to commit)
-        "git commit -m 'Initial commit from sandbox' || true",
-        # Set remote (force overwrite)
-        f"git remote remove origin 2>/dev/null || true; git remote add origin https://github.com/$(gh api user | jq -r .login)/{repo_name}.git",
-        # Push
-        "git push -u origin main --force",
-    ]
-    # Join commands with '&&' to fail fast
-    full_cmd = " && ".join(commands)
-    docker_cmd = f"docker exec sandbox sh -c {quote(full_cmd)}"
-
-    try:
-        result = await run_subprocess(docker_cmd, shell=True, timeout=120)
-        if result.code != 0:
-            return {
-                "is_error": True,
-                "message": result.stderr or "Failed to deploy repo.",
-                "exit_code": result.code,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        # Get username for repo URL
-        user_cmd = "docker exec sandbox gh api user --jq .login"
-        user_result = await run_subprocess(user_cmd, shell=True)
-        if user_result.code == 0 and user_result.stdout:
-            username = user_result.stdout.strip()
-            repo_url = f"https://github.com/{username}/{repo_name}"
-        else:
-            repo_url = f"https://github.com/unknown/{repo_name}"
-        return {
-            "repo_url": repo_url,
-            "status": "success",
-            "stdout": result.stdout,
-        }
-    except Exception as e:
-        return {"is_error": True, "message": f"Exception: {e}"}
 
 
 if __name__ == "__main__":
