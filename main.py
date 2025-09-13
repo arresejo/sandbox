@@ -213,7 +213,7 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
 @mcp.tool(
     name="deploy",
     title="Deploy Sandbox to New GitHub Repo",
-    description="Creates a new GitHub repo using the gh CLI and pushes the contents of the sandbox to it. Requires the 'gh-api-key' Bearer header.",
+    description="Creates a new GitHub repo and pushes the contents of the sandbox to it.",
 )
 async def deploy(
     repo_name: str, visibility: str = "private", description: str = ""
