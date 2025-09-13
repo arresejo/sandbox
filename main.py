@@ -201,13 +201,38 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     """
     await ensure_sandbox_exists()
 
-    p = Path(path).expanduser()
-    if not p.exists():
+    import os
+    from shlex import quote
+    import base64
+
+    # If path is absolute, use as is; if relative, prepend /workspace
+    container_path = path
+    if not os.path.isabs(container_path):
+        container_path = f"/workspace/{container_path}"
+
+    # Check if file exists in container
+    check_cmd = f"docker exec sandbox sh -c 'test -f {quote(container_path)}'"
+    check_result = await run_subprocess(check_cmd, shell=True)
+    if check_result.code != 0:
         return {"is_error": True, "message": "File does not exist", "path": path}
+
+    # Read file content from container (base64 to avoid encoding issues)
+    read_cmd = f"docker exec sandbox sh -c 'base64 {quote(container_path)}'"
+    read_result = await run_subprocess(read_cmd, shell=True)
+    if read_result.code != 0 or not read_result.stdout:
+        return {
+            "is_error": True,
+            "message": f"Failed to read file: {read_result.stderr or 'Unknown error'}",
+            "path": path,
+        }
     try:
-        original = p.read_text(encoding="utf-8")
+        original = base64.b64decode(read_result.stdout.encode("utf-8")).decode("utf-8")
     except Exception as e:
-        return {"is_error": True, "message": f"Failed to read file: {e}", "path": path}
+        return {
+            "is_error": True,
+            "message": f"Failed to decode file: {e}",
+            "path": path,
+        }
 
     modified = original
     applied = []
@@ -226,19 +251,23 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
         modified = modified.replace(search, replace)
         applied.append({"index": idx, "status": "replaced", "occurrences": occurrences})
 
-    if modified != original:
-        try:
-            p.write_text(modified, encoding="utf-8")
-        except Exception as e:
+    changed = modified != original
+    if changed:
+        # Write back to file in container using base64
+        encoded = base64.b64encode(modified.encode("utf-8")).decode("ascii")
+        write_cmd = f"echo '{encoded}' | base64 -d > {quote(container_path)}"
+        docker_cmd = f"docker exec sandbox sh -c {quote(write_cmd)}"
+        write_result = await run_subprocess(docker_cmd, shell=True)
+        if write_result.code != 0:
             return {
                 "is_error": True,
-                "message": f"Failed to write file: {e}",
+                "message": f"Failed to write file: {write_result.stderr or 'Unknown error'}",
                 "path": path,
             }
 
     return {
-        "path": str(p.resolve()),
-        "changed": modified != original,
+        "path": container_path,
+        "changed": changed,
         "replacements": applied,
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
