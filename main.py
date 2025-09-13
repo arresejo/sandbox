@@ -2,15 +2,65 @@ import asyncio
 import os
 from typing import Optional
 from fastmcp import FastMCP
-
 from command_exec import run_subprocess, CommandError
 
-mcp = FastMCP("Server", port=3000, stateless_http=True, debug=True)
-
+mcp = FastMCP("Server")
 
 @mcp.tool(
     title="Spawn sandbox",
     description="Create (if absent) and keep a named sandbox container running (detached). Returns container id.",
+)
+async def spawn_sandbox() -> dict:
+    command = "docker run -d --name sandbox sandbox-image tail -f /dev/null"
+
+    process = await asyncio.create_subprocess_shell(
+        command,
+        # stdin=asyncio.subprocess.PIPE if stdin else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        text=False,
+    )
+    # Envoyer l'input si fourni
+    # stdout, stderr = await process.communicate(input=stdin)
+    stdout, stderr = await process.communicate()
+
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "return_code": process.returncode,
+        "command": command,
+    }
+
+
+@mcp.tool(
+    title="List file",
+    description="List the files in the sandbox",
+)
+async def list_files() -> dict:
+    command = "docker run -d --name sandbox sandbox-image tail -f /dev/null"
+
+    process = await asyncio.create_subprocess_shell(
+        command,
+        # stdin=asyncio.subprocess.PIPE if stdin else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        text=False,
+    )
+    # Envoyer l'input si fourni
+    # stdout, stderr = await process.communicate(input=stdin)
+    stdout, stderr = await process.communicate()
+
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "return_code": process.returncode,
+        "command": command,
+    }
+
+
+@mcp.tool(
+    title="Command Executor",
+    description="Execute a system command with optional stdin and return stdout, stderr, and exit code.",
 )
 async def spawn_sandbox(name: str = "sandbox", image: str = "sandbox-image", recreate: bool = False) -> dict:
     """Ensure a long-lived detached container exists.
@@ -132,4 +182,9 @@ def command_help() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(
+        transport="streamable-http",
+        port=3000,
+        stateless_http=True,
+        log_level="DEBUG",  # change this if this is too verbose
+    )
