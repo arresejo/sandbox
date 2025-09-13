@@ -12,8 +12,9 @@ mcp = FastMCP("Sandbox")
     title="List files in the sandbox",
     description="List the files in the sandbox workspace directory",
 )
-@ensure_sandbox_exists
 async def list_files() -> dict:
+    await ensure_sandbox_exists()
+
     command = "docker exec sandbox ls /workspace -la"
 
     try:
@@ -49,7 +50,6 @@ async def list_files() -> dict:
 #     title="Run Command in the Sandbox",
 #     description="Execute a command inside the sandbox container. Supports stdin, timeout and output truncation.",
 # )
-# @ensure_sandbox_exists
 # async def run_command(
 #     command: str,
 #     stdin: str = "",
@@ -111,7 +111,6 @@ async def list_files() -> dict:
     title="Write File (create/overwrite)",
     description="Create or overwrite a text file with provided full content. Creates parent directories as needed.",
 )
-@ensure_sandbox_exists
 async def write_to_file(path: str, content: str) -> dict:
     """Create or overwrite a file atomically-ish.
 
@@ -124,6 +123,8 @@ async def write_to_file(path: str, content: str) -> dict:
         path="~/output.txt",
         content="Full file content here"
     """
+    await ensure_sandbox_exists()
+
     try:
         p = Path(path).expanduser().resolve()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +153,6 @@ async def write_to_file(path: str, content: str) -> dict:
     title="Replace In File",
     description="Apply multiple search/replace edits to an existing text file. Each replacement is literal (no regex).",
 )
-@ensure_sandbox_exists
 async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     """Perform targeted replacements.
 
@@ -166,6 +166,8 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
             {"search": "another_old", "replace": "another_new"},
         ]
     """
+    await ensure_sandbox_exists()
+
     p = Path(path).expanduser()
     if not p.exists():
         return {"is_error": True, "message": "File does not exist", "path": path}
