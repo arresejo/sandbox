@@ -24,16 +24,15 @@ RUN apt-get update && \
        libjpeg-dev \
        curl \
        git \
-       gh \
        ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Installer Node.js + npm pour builder ou usage
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-       nodejs \
-       npm && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# # Installer Node.js + npm pour builder ou usage
+# RUN apt-get update && \
+#     apt-get install -y --no-install-recommends \
+#        nodejs \
+#        npm && \
+#     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copier le fichier des deps Python
 COPY requirements.txt .
@@ -52,15 +51,34 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/workspace/node_modules/.bin:${PATH}"
 
+# Set working directory inside container
 WORKDIR /workspace
 
 # Installer les dépendances runtime nécessaires (non-builder)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-       ffmpeg \
-       curl \
-       git && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+        unzip \
+        jq \
+        ffmpeg \
+        curl \
+        git \
+        wget
+
+# Instal gh CLI
+RUN  mkdir -p -m 755 /etc/apt/keyrings \
+	&& out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+	&& cat $out | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+	&& chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+	&& mkdir -p -m 755 /etc/apt/sources.list.d \
+	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+	&& apt update \
+	&& apt install gh -y
+
+# Install ngrok
+RUN curl -s https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip -o ngrok.zip \
+        && unzip ngrok.zip \
+        && mv ngrok /usr/local/bin/ \
+        && rm ngrok.zip
 
 # Copier les dépendances Python déjà construites depuis builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
@@ -83,3 +101,5 @@ USER sandboxuser
 
 # Commande par défaut (tu pourras override)
 CMD ["bash"]
+# Expose the HTTP server port and ngrok API port
+EXPOSE 8000 4040
