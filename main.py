@@ -5,13 +5,148 @@ from datetime import datetime
 from utils.init_sandbox import ensure_sandbox_exists
 from shlex import quote
 import os
+
 from fastmcp.server.dependencies import get_http_headers
 
 # Use base64 to avoid shell escaping issues
 import base64
 
 
-mcp = FastMCP("Sandbox")
+mcp = FastMCP(
+    name="Sandbox MCP",
+    instructions="""
+TOOL USE
+
+You have access to a set of tools that are executed upon the user's approval. You will receive the result of that tool use. You use tools step-by-step to accomplish a given task, with each tool use informed by the result of the previous tool use.
+
+## write_to_file
+
+Description: Create or overwrite a text file with the exact full content supplied. Parent directories are created as needed. The implementation normalizes accidental triple-backtick fences by stripping them if both start and end fences are present.
+
+Parameters (match `main.py` implementation):
+
+- `path` (required, string): Target file path (relative or absolute). Home `~` is expanded.
+- `content` (required, string): Full desired file content. Provide the entire file body.
+
+Return shape:
+
+- `path`: absolute resolved path that was written.
+- `bytes_written`: number of bytes written.
+- `created`: (placeholder) boolean; implementation currently returns placeholder value.
+- `timestamp`: ISO8601 UTC timestamp of write.
+- `is_error` / `message`: present on failure.
+
+Usage example (tool call):
+<write_to_file>
+<path>docs/NOTE.md</path>
+<content>
+Project notes and documentation.
+Line 2 of the file.
+</content>
+</write_to_file>
+
+## replace_in_file
+
+Description: Apply a list of literal (non-regex) search-and-replace operations against an existing text file. Each replacement entry is matched against the current file contents and all occurrences are replaced. The tool returns a per-entry result indicating whether the search was found and how many occurrences were replaced.
+
+Parameters (match `main.py` implementation):
+
+- `path` (required, string): Path to the file to edit (home `~` expanded).
+- `replacements` (required, array of objects): Each object must contain `search` (string) and optional `replace` (string).
+
+Return shape:
+
+- `path`: absolute resolved file path.
+- `changed`: boolean whether file content changed.
+- `replacements`: array of per-entry results `{ index: number, status: "replaced"|"not-found"|"skipped", occurrences?: number, reason?: string }`.
+- `timestamp`: ISO8601 UTC timestamp.
+- `is_error` / `message`: present on failure.
+
+Usage example (tool call payload):
+<replace_in_file>
+<path>src/utils/helper.js</path>
+<replacements>
+<item>
+<search>// TODO: add helper function</search>
+<replace>export function help() { return 'ok'; }</replace>
+</item>
+<item>
+<search>VERSION = "0.1.0"</search>
+<replace>VERSION = "0.2.0"</replace>
+</item>
+</replacements>
+</replace_in_file>
+
+## read_file
+
+Description: Return the full textual content of a file within the project root (UTF-8). Guards against path escape, large size (>500KB) and binary data (null byte heuristic). Returns content plus size and timestamp.
+
+Parameters:
+
+- `path` (string, required): File path (relative to root or absolute). `~` expanded. Must resolve inside project root.
+
+Return shape:
+
+- `path`: absolute resolved path
+- `content`: file text (may include a trailing TRUNCATED marker if size guard triggered)
+- `truncated`: boolean
+
+## list_file
+
+Description: List (non-recursive) directory entries at a given path inside project root. Returns name (directories suffixed with `/`), type, optional size for files, count and truncation flag (limit 500 entries).
+
+Parameters:
+
+- `path` (string, optional, default "."): Directory path to enumerate.
+
+Return shape:
+
+- `path`: absolute directory path
+- `entries`: array of { name, type (file|directory), size? }
+- `truncated`: boolean (true if limit reached)
+- `count`: number of returned entries
+- `timestamp`: ISO8601 UTC
+- `is_error` / `message`: on failure
+
+Example tool call:
+<list_file>
+<path>src/</path>
+</list_file>
+
+Example response (conceptual):
+{
+"path": "/workspace/src",
+"entries": [
+{ "name": "utils/", "type": "directory" },
+{ "name": "main.py", "type": "file", "size": 2048 }
+],
+"truncated": false,
+"count": 2,
+"timestamp": "2025-09-13T12:34:56Z"
+}
+
+## push_files
+
+Description: Create a new GitHub repository and push files in the sandbox to it.
+
+Parameters:
+
+- `repo_name` (optional, string): Name of the GitHub repository.
+
+Usage example (tool call):
+<push_files>
+<repo_name>my-sandbox-repo</repo_name>
+</push_files>
+
+Return shape:
+
+- `repo_url`: URL of the created repository.
+- `status`: "success" on success.
+- `stdout`: Output from the deployment process.
+- `is_error` / `message` / `stderr` / `exit_code`: present on failure.
+
+""",
+)
 
 
 @mcp.tool(
@@ -264,95 +399,78 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     }
 
 
-# --- DEPLOY TOOL ---
-# https://gofastmcp.com/servers/context#http-headers
 @mcp.tool(
-    name="deploy",
-    title="Deploy Sandbox to New GitHub Repo",
-    description="Creates a new GitHub repo and pushes the contents of the sandbox to it.",
+    name="push_files",
+    title="Push Files to GitHub",
+    description="Push files in the sandbox to Github, creating a new repository first.",
 )
-async def deploy(
-    repo_name: str, visibility: str = "private", description: str = ""
-) -> dict:
-    """
-    Create a new GitHub repo and push the contents of the sandbox to it.
-    Args:
-        repo_name: Name for the new repository
-        visibility: 'private' or 'public' (default: private)
-        description: Optional repo description
-    Returns:
-        Dict with repo URL and status
-    """
-    print("DEPLOY CALLED")
-    await ensure_sandbox_exists()
+async def push_files(repo_name="default_name") -> dict:
+    # 1. Get repo name (use timestamp for uniqueness)
+    repo_name = f"sandbox-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    org = None  # Optionally set to a GitHub org
+    full_repo = repo_name if not org else f"{org}/{repo_name}"
 
-    # Get the GitHub API key from the Bearer header
-    # The MCP runtime should provide this in the tool call context
-    try:
-        headers = get_http_headers()
-        print("headers", headers)
-        gh_token = headers.get("gh-api-key")
-        print("gh_token", gh_token)
-    except Exception as e:
-        print(e)
+    # 2. Get GH token from special header (injected by infra)
+    headers = get_http_headers()
+    print("headers", headers)
+    gh_token = headers.get("gh-api-key")
+    print("gh-api-key", gh_token)
 
     if not gh_token:
         return {
             "is_error": True,
-            "message": "Missing GitHub API key in 'gh-api-key' header.",
+            "message": "Missing GitHub API key in environment (GH_API_KEY or gh-api-key)",
         }
 
-    # Prepare commands to run inside the container
-    # 1. Set up git config and gh auth
-    # 2. Create repo with gh
-    # 3. Initialize git, add, commit, push
-    commands = [
-        # Authenticate gh CLI
-        f"echo {quote(gh_token)} | gh auth login --with-token",
-        # Create the repo
-        f"gh repo create {quote(repo_name)} --{visibility} --description {quote(description)} --confirm",
-        # Initialize git if needed
-        "[ -d .git ] || git init",
-        # Set default branch
-        "git checkout -B main",
-        # Add all files
-        "git add .",
-        # Commit (ignore error if nothing to commit)
-        "git commit -m 'Initial commit from sandbox' || true",
-        # Set remote (force overwrite)
-        f"git remote remove origin 2>/dev/null || true; git remote add origin https://github.com/$(gh api user | jq -r .login)/{repo_name}.git",
-        # Push
-        "git push -u origin main --force",
-    ]
-    # Join commands with '&&' to fail fast
-    full_cmd = " && ".join(commands)
-    docker_cmd = f"docker exec sandbox sh -c {quote(full_cmd)}"
+    # 4. All commands run inside the sandbox container, in /workspace
+    workdir = "/workspace"
+    cmds = []
+    # a. Init git if needed
+    cmds.append("git init -b main")
+    cmds.append("git config user.email 'sandbox@example.com'")
+    cmds.append("git config user.name 'sandbox-bot'")
+    # b. Add all files
+    cmds.append("git add .")
+    cmds.append("git commit -m 'Initial commit'")
+    # c. Create repo with gh CLI
+    cmds.append(
+        f"gh repo create {full_repo} --public --source=. --remote=origin --push --confirm"
+    )
 
-    try:
-        result = await run_subprocess(docker_cmd, shell=True, timeout=120)
-        if result.code != 0:
+    # d. If gh CLI fails to push, try manual push
+    cmds.append("git push origin main")
+
+    # 5. Run each command, collect output
+    results = []
+    for cmd in cmds:
+        docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' -e GITHUB_TOKEN='{gh_token}' -w {workdir} sandbox sh -c {quote(cmd)}"
+        try:
+            res = await run_subprocess(docker_cmd, shell=True)
+            results.append(
+                {
+                    "command": cmd,
+                    "code": res.code,
+                    "stdout": res.stdout,
+                    "stderr": res.stderr,
+                }
+            )
+            if res.code != 0:
+                return {
+                    "is_error": True,
+                    "message": f"Command failed: {cmd}",
+                    "results": results,
+                }
+        except CommandError as ce:
             return {
                 "is_error": True,
-                "message": result.stderr or "Failed to deploy repo.",
-                "exit_code": result.code,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "message": str(ce),
+                "command": cmd,
+                "results": results,
             }
-        # Get username for repo URL
-        user_cmd = "docker exec sandbox gh api user --jq .login"
-        user_result = await run_subprocess(user_cmd, shell=True)
-        if user_result.code == 0 and user_result.stdout:
-            username = user_result.stdout.strip()
-            repo_url = f"https://github.com/{username}/{repo_name}"
-        else:
-            repo_url = f"https://github.com/unknown/{repo_name}"
-        return {
-            "repo_url": repo_url,
-            "status": "success",
-            "stdout": result.stdout,
-        }
-    except Exception as e:
-        return {"is_error": True, "message": f"Exception: {e}"}
+
+    # 6. Compose repo URL
+    repo_url = f"https://github.com/{full_repo}"
+    return {"repo": full_repo, "url": repo_url, "results": results, "is_error": False}
 
 
 if __name__ == "__main__":
