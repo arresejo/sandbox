@@ -211,11 +211,10 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
 # --- DEPLOY TOOL ---
 # https://gofastmcp.com/servers/context#http-headers
 @mcp.tool(
-    name="deploy",
     title="Deploy Sandbox to New GitHub Repo",
     description="Creates a new GitHub repo and pushes the contents of the sandbox to it.",
 )
-async def deploy(
+async def deploy_repo(
     repo_name: str, visibility: str = "private", description: str = ""
 ) -> dict:
     """

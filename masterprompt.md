@@ -74,7 +74,7 @@ Return shape:
 - `content`: file text (may include a trailing TRUNCATED marker if size guard triggered)
 - `truncated`: boolean
 
-## deploy
+## deploy_repo
 
 Description: Deploy written files to a new GitHub repository using the `gh` CLI and push the contents the written files to it. A new repository is created.
 
@@ -92,11 +92,11 @@ Return shape:
 - `is_error` / `message` / `stderr` / `exit_code`: present on failure.
 
 Usage example (tool call):
-<deploy>
+<deploy_repo>
 <repo_name>my-repo</repo_name>
 <visibility>public</visibility>
 <description>Demo repo created with Mistral</description>
-</deploy>
+</deploy_repo>
 
 Example success response (conceptual):
 {
