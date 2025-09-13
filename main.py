@@ -1,48 +1,80 @@
-"""
-MCP Server Template
-"""
+import asyncio
+import subprocess
+import json
+from fastmcp import FastMCP
 
-from mcp.server.fastmcp import FastMCP
-from pydantic import Field
-
-import mcp.types as types
-
-mcp = FastMCP("Echo Server", port=3000, stateless_http=True, debug=True)
-
+mcp = FastMCP("Server", port=3000, stateless_http=True, debug=True)
 
 @mcp.tool(
-    title="Echo Tool",
-    description="Echo the input text",
+    title="Command Executor",
+    description="Execute a system command with optional stdin and return stdout, stderr, and exit code.",
 )
-def echo(text: str = Field(description="The text to echo")) -> str:
-    return text
+async def run_command(command: str, stdin: str = None) -> dict:
+    """
+    Execute a system command and return the output.
+    
+    Args:
+        command: The command to execute (e.g., 'ls -la', 'echo hello')
+        stdin: Optional input to pass to the command
+    
+    Returns:
+        Dictionary containing stdout, stderr, and return code
+    """
+    try:
+        # Exécuter la commande
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdin=asyncio.subprocess.PIPE if stdin else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            text=True
+        )
+        
+        # Envoyer l'input si fourni
+        stdout, stderr = await process.communicate(input=stdin)
+        
+        return {
+            "stdout": stdout,
+            "stderr": stderr,
+            "return_code": process.returncode,
+            "command": command
+        }
+        
+    except Exception as e:
+        return {
+            "stdout": "",
+            "stderr": f"Error executing command: {str(e)}",
+            "return_code": -1,
+            "command": command
+        }
 
-
-@mcp.resource(
-    uri="greeting://{name}",
-    description="Get a personalized greeting",
-    name="Greeting Resource",
-)
-def get_greeting(
-    name: str,
-) -> str:
-    return f"Hello, {name}!"
-
-
-@mcp.prompt("")
-def greet_user(
-    name: str = Field(description="The name of the person to greet"),
-    style: str = Field(description="The style of the greeting", default="friendly"),
-) -> str:
-    """Generate a greeting prompt"""
-    styles = {
-        "friendly": "Please write a warm, friendly greeting",
-        "formal": "Please write a formal, professional greeting",
-        "casual": "Please write a casual, relaxed greeting",
+@mcp.resource("system://info")
+def get_system_info():
+    """Get basic system information"""
+    import platform
+    import os
+    
+    return {
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "working_directory": os.getcwd(),
+        "user": os.getenv("USER", "unknown")
     }
 
-    return f"{styles.get(style, styles['friendly'])} for someone named {name}."
-
+@mcp.prompt
+def command_help() -> str:
+    """Get help for using the command execution tool"""
+    return """
+    This server provides command execution capabilities. Use the run_command tool to execute system commands.
+    
+    Examples:
+    - List files: run_command("ls -la")
+    - Check disk space: run_command("df -h")
+    - Echo text: run_command("echo 'Hello World'")
+    - With stdin: run_command("cat", stdin="Hello from stdin")
+    
+    ⚠️  Warning: Be careful with the commands you execute!
+    """
 
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
