@@ -73,6 +73,47 @@ Return shape:
 - `path`: absolute resolved path
 - `content`: file text (may include a trailing TRUNCATED marker if size guard triggered)
 - `truncated`: boolean
+
+## deploy
+
+Description: Create a new GitHub repository using the `gh` CLI and push the contents of the sandbox to it. Requires the `gh-api-key` Bearer header to be set on the tool call (this is the GitHub API token). The tool will create the repo, initialize git if needed, commit all files, and push to the new repo.
+
+Parameters (match `main.py` implementation):
+
+- `repo_name` (required, string): Name for the new GitHub repository.
+- `visibility` (optional, string): Either `private` or `public`. Default is `private`.
+- `description` (optional, string): Description for the repository.
+
+Return shape:
+
+- `repo_url`: URL of the created repository.
+- `status`: "success" on success.
+- `stdout`: Output from the deployment process.
+- `is_error` / `message` / `stderr` / `exit_code`: present on failure.
+
+Usage example (tool call):
+<deploy>
+<repo_name>my-sandbox-repo</repo_name>
+<visibility>public</visibility>
+<description>Demo repo created from sandbox</description>
+</deploy>
+
+Example success response (conceptual):
+{
+"repo_url": "https://github.com/username/my-sandbox-repo",
+"status": "success",
+"stdout": "...gh cli output..."
+}
+
+Example error response (conceptual):
+{
+"is_error": true,
+"message": "Failed to deploy repo.",
+"exit_code": 1,
+"stdout": "...",
+"stderr": "..."
+}
+
 - `size`: integer bytes
 - `timestamp`: ISO8601 UTC
 - `is_error` / `message`: on failure

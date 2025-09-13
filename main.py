@@ -207,15 +207,6 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     }
 
 
-if __name__ == "__main__":
-    mcp.run(
-        transport="streamable-http",
-        port=3000,
-        stateless_http=True,
-        log_level="DEBUG",  # change this if this is too verbose
-    )
-
-
 # --- DEPLOY TOOL ---
 @mcp.tool(
     name="deploy",
@@ -299,3 +290,12 @@ async def deploy(
         }
     except Exception as e:
         return {"is_error": True, "message": f"Exception: {e}"}
+
+
+if __name__ == "__main__":
+    mcp.run(
+        transport="streamable-http",
+        port=3000,
+        stateless_http=True,
+        log_level="DEBUG",  # change this if this is too verbose
+    )
