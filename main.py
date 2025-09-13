@@ -1,10 +1,32 @@
 import asyncio
 import os
-from typing import Optional
+from typing import Optional, List
 from fastmcp import FastMCP
 from command_exec import run_subprocess, CommandError
 from datetime import datetime
 from pathlib import Path
+import mimetypes
+
+ROOT = Path(__file__).parent.resolve()
+MAX_READ_BYTES = 500_000  # ~500 KB safety cap
+MAX_DIR_ENTRIES = 500
+
+def resolve_secure_path(path: str) -> Path:
+    """Resolve a user-supplied path safely within project root.
+
+    Expands ~, resolves symlinks, and ensures final path is within ROOT.
+    Raises ValueError if path escapes root.
+    """
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = (ROOT / p).resolve()
+    else:
+        p = p.resolve()
+    try:
+        p.relative_to(ROOT)
+    except ValueError:
+        raise ValueError("Path escapes project root")
+    return p
 
 mcp = FastMCP("Server")
 
@@ -35,29 +57,100 @@ async def spawn_sandbox() -> dict:
 
 
 @mcp.tool(
-    title="List file",
-    description="List the files in the sandbox",
+    name="read_file",
+    title="Read File",
+    description="Return full textual content of a file (with size/binary safeguards).",
 )
-async def list_files() -> dict:
-    command = "docker run -d --name sandbox sandbox-image tail -f /dev/null"
+async def read_file(path: str) -> dict:
+    """Read a text file within the project root with safety checks.
 
-    process = await asyncio.create_subprocess_shell(
-        command,
-        # stdin=asyncio.subprocess.PIPE if stdin else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        text=False,
-    )
-    # Envoyer l'input si fourni
-    # stdout, stderr = await process.communicate(input=stdin)
-    stdout, stderr = await process.communicate()
+    Returns content (possibly truncated) and metadata. Rejects large or binary files.
+    """
+    try:
+        p = resolve_secure_path(path)
+    except ValueError as e:
+        return {"is_error": True, "message": str(e), "path": path}
 
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "return_code": process.returncode,
-        "command": command,
-    }
+    if not p.exists():
+        return {"is_error": True, "message": "File does not exist", "path": str(p)}
+    if p.is_dir():
+        return {"is_error": True, "message": "Path is a directory", "path": str(p)}
+
+    try:
+        size = p.stat().st_size
+        if size > MAX_READ_BYTES:
+            return {"is_error": True, "message": f"File too large (>{MAX_READ_BYTES} bytes)", "path": str(p), "size": size}
+
+        # rudimentary binary detection: look for null bytes in first chunk
+        chunk = p.read_bytes()[:2048]
+        if b"\x00" in chunk:
+            return {"is_error": True, "message": "Binary file likely (null bytes detected)", "path": str(p)}
+
+        text = p.read_text(encoding="utf-8")
+        truncated = False
+        if len(text.encode('utf-8')) > MAX_READ_BYTES:
+            # Shouldn't happen due to earlier size check, but double-guard
+            enc = text.encode('utf-8')[:MAX_READ_BYTES]
+            text = enc.decode('utf-8', errors='ignore') + "\n<!-- TRUNCATED -->\n"
+            truncated = True
+        return {
+            "path": str(p),
+            "content": text,
+            "truncated": truncated,
+            "size": size,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+    except Exception as e:
+        return {"is_error": True, "message": f"Failed to read file: {e}", "path": str(p)}
+
+
+@mcp.tool(
+    name="list_file",
+    title="List Directory",
+    description="List files/directories at a path within project root (non-recursive).",
+)
+async def list_file(path: str = ".") -> dict:
+    """Enumerate directory entries with basic metadata.
+
+    Limits number of entries; returns a truncated flag if limit exceeded.
+    """
+    try:
+        p = resolve_secure_path(path)
+    except ValueError as e:
+        return {"is_error": True, "message": str(e), "path": path}
+
+    if not p.exists():
+        return {"is_error": True, "message": "Path does not exist", "path": str(p)}
+    if not p.is_dir():
+        return {"is_error": True, "message": "Path is not a directory", "path": str(p)}
+
+    entries = []
+    truncated = False
+    try:
+        for idx, child in enumerate(sorted(p.iterdir(), key=lambda c: c.name.lower())):
+            if idx >= MAX_DIR_ENTRIES:
+                truncated = True
+                break
+            kind = "directory" if child.is_dir() else "file"
+            size = None
+            if child.is_file():
+                try:
+                    size = child.stat().st_size
+                except Exception:
+                    size = None
+            entry = {"name": child.name + ("/" if child.is_dir() else ""), "type": kind}
+            if size is not None:
+                entry["size"] = size
+            entries.append(entry)
+        return {
+            "path": str(p),
+            "entries": entries,
+            "truncated": truncated,
+            "count": len(entries),
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+    except Exception as e:
+        return {"is_error": True, "message": f"Failed to list directory: {e}", "path": str(p)}
 
 
 @mcp.tool(
