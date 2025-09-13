@@ -15,11 +15,44 @@ Start the server on port 3000:
 uv run main.py
 ```
 
-## Running the Inspector
+### Available Tools
 
-### Requirements
+1. `run_command`
+     - Execute arbitrary shell commands with structured output.
+     - Parameters:
+         - `command` (str, required): Shell command to run.
+         - `stdin` (str, optional): Text piped to process STDIN.
+         - `workdir` (str, optional): Working directory for the process.
+         - `timeout` (float, optional): Seconds before termination.
+         - `shell` (bool, default True): Use shell or exec argv directly.
+         - `max_output_bytes` (int, default 200000): Truncation threshold per stream.
+     - Response fields:
+         - `segments`: list of `{ name: "STDOUT"|"STDERR", text: str }`.
+         - `exit_code`: integer return code.
+         - `truncated`: boolean if any stream truncated.
+         - `timeout`: boolean (false unless future enhancement adds soft timeout reporting).
+         - `is_error`: present when exit_code != 0.
 
-- Node.js: ^22.7.5
+     Example: list repo files
+     > Use the `run_command` tool: `run_command("ls -1")`.
+
+2. `spawn_sandbox`
+     - Ensures a long‑lived detached docker container exists (name defaults to `sandbox`).
+     - Parameters:
+         - `name` (str, default `sandbox`)
+         - `image` (str, default `sandbox-image`)
+         - `recreate` (bool, default False) remove existing then create new
+     - Response: `{ error: bool, container_id?, created?, name, image, message?, stderr? }`
+
+### Prompt
+
+`command_help` – concise guidance for using `run_command` including parameters and error semantics.
+
+## Running the Inspector (Optional)
+
+### Optional Requirement (Only for Inspector UI)
+
+If you want to use the MCP Inspector UI for debugging/introspection you need Node.js (tested with >=22). The Python MCP server itself does NOT depend on Node.js.
 
 ### Quick Start (UI mode)
 
@@ -54,6 +87,14 @@ async def new_tool(
     """The new tool underlying method"""
     result = await some_api_call(tool_param1, tool_param2)
     return result
+```
+
+### Tests
+
+Execute minimal async tests for the execution layer:
+
+```bash
+uv run test_run_command.py
 ```
 
 ### Adding New Resources
