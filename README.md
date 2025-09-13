@@ -1,23 +1,6 @@
-# mcp-server-template-python
-
-A very simple Python template for building MCP servers using Streamable HTTP transport.
-
-## Overview
-This template provides a foundation for creating MCP servers that can communicate with AI assistants and other MCP clients. It includes a simple HTTP server implementation with example tools, resources & prompts to help you get started building your own MCP integrations.
-
-## Prerequisites
-- Install uv (https://docs.astral.sh/uv/getting-started/installation/)
+# Sandbox
 
 ## Installation
-
-1. Clone the repository:
-
-```bash
-git clone git@github.com:alpic-ai/mcp-server-template-python.git
-cd mcp-server-template-python
-```
-
-2. Install python version & dependencies:
 
 ```bash
 uv python install
@@ -35,10 +18,13 @@ uv run main.py
 ## Running the Inspector
 
 ### Requirements
+
 - Node.js: ^22.7.5
 
 ### Quick Start (UI mode)
+
 To get up and running right away with the UI, just execute the following:
+
 ```bash
 npx @modelcontextprotocol/inspector
 ```
@@ -46,6 +32,7 @@ npx @modelcontextprotocol/inspector
 The inspector server will start up and the UI will be accessible at http://localhost:6274.
 
 You can test your server locally by selecting:
+
 - Transport Type: Streamable HTTP
 - URL: http://127.0.0.1:3000/mcp
 
@@ -61,8 +48,8 @@ To add a new tool, modify `main.py`:
     description="Tool Description for the LLM",
 )
 async def new_tool(
-    tool_param1: str = Field(description="The description of the param1 for the LLM"), 
-    tool_param2: float = Field(description="The description of the param2 for the LLM") 
+    tool_param1: str = Field(description="The description of the param1 for the LLM"),
+    tool_param2: float = Field(description="The description of the param2 for the LLM")
 )-> str:
     """The new tool underlying method"""
     result = await some_api_call(tool_param1, tool_param2)
