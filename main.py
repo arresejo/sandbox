@@ -1,9 +1,13 @@
-from typing import Optional
 from fastmcp import FastMCP
 from command_exec import run_subprocess, CommandError
 from datetime import datetime
-from pathlib import Path
 from utils.init_sandbox import ensure_sandbox_exists
+from shlex import quote
+import os
+
+# Use base64 to avoid shell escaping issues
+import base64
+
 
 mcp = FastMCP("Sandbox")
 
@@ -45,67 +49,6 @@ async def list_files() -> dict:
         }
 
 
-# @mcp.tool(
-#     name="run_command",
-#     title="Run Command in the Sandbox",
-#     description="Execute a command inside the sandbox container. Supports stdin, timeout and output truncation.",
-# )
-# async def run_command(
-#     command: str,
-#     stdin: str = "",
-#     timeout: Optional[float] = None,
-#     shell: bool = True,
-#     max_output_bytes: int = 200_000,
-# ) -> dict:
-#     """Execute a command inside the sandbox container and return structured segments.
-
-#     Returns a dict with segments list: each segment has name and text.
-#     Errors return is_error True and may omit stdout if not produced.
-#     """
-#     # Use stdin to pipe the script into the container for robust multi-line support
-#     docker_command = "docker exec -i sandbox sh"
-
-#     try:
-#         # If stdin is provided, prepend the command to it; otherwise, use command as stdin
-#         script = command if not stdin else f"{command}\n{stdin}"
-#         result = await run_subprocess(
-#             docker_command,
-#             stdin=script,
-#             timeout=timeout,
-#             shell=shell,
-#             max_output_bytes=max_output_bytes,
-#         )
-#     except CommandError as ce:
-#         return {
-#             "is_error": True,
-#             "message": str(ce),
-#             "command": command,
-#         }
-#     segments = []
-#     if result.stdout:
-#         segments.append({"name": "STDOUT", "text": result.stdout})
-#     if result.stderr:
-#         segments.append({"name": "STDERR", "text": result.stderr})
-#     meta = {
-#         "exit_code": result.code,
-#         "truncated": result.truncated,
-#         "timeout": result.timeout,
-#         "command": command,
-#     }
-#     is_error = result.code != 0
-#     if is_error:
-#         meta["is_error"] = True
-#     return {"segments": segments, **meta}
-
-
-# @mcp.prompt
-# def command_help() -> str:
-#     return (
-#         "Run shell commands inside the sandbox container. Parameters: command (required), stdin (optional string), timeout (seconds), shell (bool), max_output_bytes (int). "
-#         "Returns segments STDOUT/STDERR; sets is_error when exit_code != 0. Output may be truncated with marker."
-#     )
-
-
 @mcp.tool(
     name="write_to_file",
     title="Write File (create/overwrite)",
@@ -134,8 +77,6 @@ async def write_to_file(path: str, content: str) -> dict:
 
     # Write the file inside the sandbox container
     # Use /workspace as the root inside the container
-    from shlex import quote
-    import os
 
     # If path is absolute, use as is; if relative, prepend /workspace
     container_path = path
@@ -144,8 +85,6 @@ async def write_to_file(path: str, content: str) -> dict:
     # Ensure parent directories exist inside the container
     mkdir_cmd = f"mkdir -p $(dirname {quote(container_path)})"
     # Write content using echo and redirection (handle special chars with printf)
-    # Use base64 to avoid shell escaping issues
-    import base64
 
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
     write_cmd = f"echo '{encoded}' | base64 -d > {quote(container_path)}"
@@ -201,11 +140,6 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     """
     await ensure_sandbox_exists()
 
-    import os
-    from shlex import quote
-    import base64
-
-    # If path is absolute, use as is; if relative, prepend /workspace
     container_path = path
     if not os.path.isabs(container_path):
         container_path = f"/workspace/{container_path}"
@@ -280,3 +214,88 @@ if __name__ == "__main__":
         stateless_http=True,
         log_level="DEBUG",  # change this if this is too verbose
     )
+
+
+# --- DEPLOY TOOL ---
+@mcp.tool(
+    name="deploy",
+    title="Deploy Sandbox to New GitHub Repo",
+    description="Creates a new GitHub repo using the gh CLI and pushes the contents of the sandbox to it. Requires the 'gh-api-key' Bearer header.",
+)
+async def deploy(
+    repo_name: str, visibility: str = "private", description: str = ""
+) -> dict:
+    """
+    Create a new GitHub repo and push the contents of the sandbox to it.
+    Args:
+        repo_name: Name for the new repository
+        visibility: 'private' or 'public' (default: private)
+        description: Optional repo description
+    Returns:
+        Dict with repo URL and status
+    """
+
+    await ensure_sandbox_exists()
+
+    # Get the GitHub API key from the Bearer header
+    # The MCP runtime should provide this in the tool call context
+    gh_token = mcp.context.headers.get("gh-api-key")
+    print("gh_token", gh_token)
+
+    if not gh_token:
+        return {
+            "is_error": True,
+            "message": "Missing GitHub API key in 'gh-api-key' header.",
+        }
+
+    # Prepare commands to run inside the container
+    # 1. Set up git config and gh auth
+    # 2. Create repo with gh
+    # 3. Initialize git, add, commit, push
+    commands = [
+        # Authenticate gh CLI
+        f"echo {quote(gh_token)} | gh auth login --with-token",
+        # Create the repo
+        f"gh repo create {quote(repo_name)} --{visibility} --description {quote(description)} --confirm",
+        # Initialize git if needed
+        "[ -d .git ] || git init",
+        # Set default branch
+        "git checkout -B main",
+        # Add all files
+        "git add .",
+        # Commit (ignore error if nothing to commit)
+        "git commit -m 'Initial commit from sandbox' || true",
+        # Set remote (force overwrite)
+        f"git remote remove origin 2>/dev/null || true; git remote add origin https://github.com/$(gh api user | jq -r .login)/{repo_name}.git",
+        # Push
+        "git push -u origin main --force",
+    ]
+    # Join commands with '&&' to fail fast
+    full_cmd = " && ".join(commands)
+    docker_cmd = f"docker exec sandbox sh -c {quote(full_cmd)}"
+
+    try:
+        result = await run_subprocess(docker_cmd, shell=True, timeout=120)
+        if result.code != 0:
+            return {
+                "is_error": True,
+                "message": result.stderr or "Failed to deploy repo.",
+                "exit_code": result.code,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        # Get username for repo URL
+        user_cmd = "docker exec sandbox gh api user --jq .login"
+        user_result = await run_subprocess(user_cmd, shell=True)
+        if user_result.code == 0 and user_result.stdout:
+            username = user_result.stdout.strip()
+            repo_url = f"https://github.com/{username}/{repo_name}"
+        else:
+            repo_url = f"https://github.com/unknown/{repo_name}"
+        return {
+            "repo_url": repo_url,
+            "status": "success",
+            "stdout": result.stdout,
+        }
+    except Exception as e:
+        return {"is_error": True, "message": f"Exception: {e}"}
