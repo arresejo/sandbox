@@ -1,12 +1,6 @@
-FROM ubuntu:24.04
+FROM node:24-slim
 
-# Install Node.js
-# RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-RUN apt update
-RUN apt install -y nodejs npm
-RUN node --version
-RUN npm --version
+RUN mkdir /workspace
 
-# Increase the number of inotify watches to avoid ENOSPC error
-RUN echo "fs.inotify.max_user_watches=524288" >> /etc/sysctl.conf
-
+# Increase the number of inotify watches to avoid ENOSPC error (can be useful in a dev environment with a lot of files)
+# RUN echo "fs.inotify.max_user_watches=524288" >> /etc/sysctl.conf
