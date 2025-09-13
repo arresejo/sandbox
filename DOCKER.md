@@ -37,7 +37,7 @@ docker exec sandbox cat /workspace/myfile.txt
 Execute an arbitrary command in the sandbox
 
 ```bash
-docker exec sandbox sh -c <commmand>
+docker exec sandbox sh -c 'touch /workspace/file.txt; echo 'salut' > /workspace/salut.txt'
 ```
 
 **Note**:
