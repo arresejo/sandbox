@@ -1,0 +1,10 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: arresejo/sandbox-infra/.github/workflows/deploy-railway.yml@main
+    secrets: inherit

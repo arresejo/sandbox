@@ -1,279 +1,109 @@
-import asyncio
-import os
-from typing import Optional, List
+from typing import Optional
 from fastmcp import FastMCP
 from command_exec import run_subprocess, CommandError
 from datetime import datetime
 from pathlib import Path
-import mimetypes
+from utils.init_sandbox import ensure_sandbox_exists
 
-ROOT = Path(__file__).parent.resolve()
-MAX_READ_BYTES = 500_000  # ~500 KB safety cap
-MAX_DIR_ENTRIES = 500
-
-def resolve_secure_path(path: str) -> Path:
-    """Resolve a user-supplied path safely within project root.
-
-    Expands ~, resolves symlinks, and ensures final path is within ROOT.
-    Raises ValueError if path escapes root.
-    """
-    p = Path(path).expanduser()
-    if not p.is_absolute():
-        p = (ROOT / p).resolve()
-    else:
-        p = p.resolve()
-    try:
-        p.relative_to(ROOT)
-    except ValueError:
-        raise ValueError("Path escapes project root")
-    return p
-
-mcp = FastMCP("Server")
-
-@mcp.tool(
-    title="Spawn sandbox",
-    description="Create (if absent) and keep a named sandbox container running (detached). Returns container id.",
-)
-async def spawn_sandbox() -> dict:
-    command = "docker run -d --name sandbox sandbox-image tail -f /dev/null"
-
-    process = await asyncio.create_subprocess_shell(
-        command,
-        # stdin=asyncio.subprocess.PIPE if stdin else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        text=False,
-    )
-    # Envoyer l'input si fourni
-    # stdout, stderr = await process.communicate(input=stdin)
-    stdout, stderr = await process.communicate()
-
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "return_code": process.returncode,
-        "command": command,
-    }
+mcp = FastMCP("Sandbox")
 
 
 @mcp.tool(
-    name="read_file",
-    title="Read File",
-    description="Return full textual content of a file (with size/binary safeguards).",
+    title="List files in the sandbox",
+    description="List the files in the sandbox workspace directory",
 )
-async def read_file(path: str) -> dict:
-    """Read a text file within the project root with safety checks.
+async def list_files() -> dict:
+    await ensure_sandbox_exists()
 
-    Returns content (possibly truncated) and metadata. Rejects large or binary files.
-    """
-    try:
-        p = resolve_secure_path(path)
-    except ValueError as e:
-        return {"is_error": True, "message": str(e), "path": path}
+    command = "docker exec sandbox ls /workspace -la"
 
-    if not p.exists():
-        return {"is_error": True, "message": "File does not exist", "path": str(p)}
-    if p.is_dir():
-        return {"is_error": True, "message": "Path is a directory", "path": str(p)}
-
-    try:
-        size = p.stat().st_size
-        if size > MAX_READ_BYTES:
-            return {"is_error": True, "message": f"File too large (>{MAX_READ_BYTES} bytes)", "path": str(p), "size": size}
-
-        # rudimentary binary detection: look for null bytes in first chunk
-        chunk = p.read_bytes()[:2048]
-        if b"\x00" in chunk:
-            return {"is_error": True, "message": "Binary file likely (null bytes detected)", "path": str(p)}
-
-        text = p.read_text(encoding="utf-8")
-        truncated = False
-        if len(text.encode('utf-8')) > MAX_READ_BYTES:
-            # Shouldn't happen due to earlier size check, but double-guard
-            enc = text.encode('utf-8')[:MAX_READ_BYTES]
-            text = enc.decode('utf-8', errors='ignore') + "\n<!-- TRUNCATED -->\n"
-            truncated = True
-        return {
-            "path": str(p),
-            "content": text,
-            "truncated": truncated,
-            "size": size,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
-    except Exception as e:
-        return {"is_error": True, "message": f"Failed to read file: {e}", "path": str(p)}
-
-
-@mcp.tool(
-    name="list_file",
-    title="List Directory",
-    description="List files/directories at a path within project root (non-recursive).",
-)
-async def list_file(path: str = ".") -> dict:
-    """Enumerate directory entries with basic metadata.
-
-    Limits number of entries; returns a truncated flag if limit exceeded.
-    """
-    try:
-        p = resolve_secure_path(path)
-    except ValueError as e:
-        return {"is_error": True, "message": str(e), "path": path}
-
-    if not p.exists():
-        return {"is_error": True, "message": "Path does not exist", "path": str(p)}
-    if not p.is_dir():
-        return {"is_error": True, "message": "Path is not a directory", "path": str(p)}
-
-    entries = []
-    truncated = False
-    try:
-        for idx, child in enumerate(sorted(p.iterdir(), key=lambda c: c.name.lower())):
-            if idx >= MAX_DIR_ENTRIES:
-                truncated = True
-                break
-            kind = "directory" if child.is_dir() else "file"
-            size = None
-            if child.is_file():
-                try:
-                    size = child.stat().st_size
-                except Exception:
-                    size = None
-            entry = {"name": child.name + ("/" if child.is_dir() else ""), "type": kind}
-            if size is not None:
-                entry["size"] = size
-            entries.append(entry)
-        return {
-            "path": str(p),
-            "entries": entries,
-            "truncated": truncated,
-            "count": len(entries),
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
-    except Exception as e:
-        return {"is_error": True, "message": f"Failed to list directory: {e}", "path": str(p)}
-
-
-@mcp.tool(
-    title="Command Executor",
-    description="Execute a system command with optional stdin and return stdout, stderr, and exit code.",
-)
-async def spawn_sandbox(name: str = "sandbox", image: str = "sandbox-image", recreate: bool = False) -> dict:
-    """Ensure a long-lived detached container exists.
-
-    Args:
-        name: Container name
-        image: Docker image to use
-        recreate: If True and container exists, remove then recreate
-    """
-    async def run(cmd: str):
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, err = await proc.communicate()
-        return proc.returncode, (out or b"").decode(), (err or b"").decode()
-
-    # Check if exists
-    code, out, err = await run(f"docker ps -a --filter name=^{name}$ --format '{{{{.ID}}}} {{{{.Status}}}}'")
-    if code != 0:
-        return {"error": True, "message": "Failed to query docker", "stderr": err.strip(), "return_code": code}
-
-    exists = bool(out.strip())
-    if exists and recreate:
-        rc, _o, e = await run(f"docker rm -f {name}")
-        if rc != 0:
-            return {"error": True, "message": "Failed to remove existing container", "stderr": e.strip(), "return_code": rc}
-        exists = False
-
-    if not exists:
-        create_cmd = f"docker run -d --name {name} {image} tail -f /dev/null"
-        rc, o, e = await run(create_cmd)
-        if rc != 0:
-            return {"error": True, "message": "Failed to create container", "stderr": e.strip(), "return_code": rc, "command": create_cmd}
-        container_id = o.strip()
-        created = True
-    else:
-        # If exists but maybe exited, start it
-        rc, o2, e2 = await run(f"docker start {name}")
-        if rc != 0:
-            return {"error": True, "message": "Failed to start existing container", "stderr": e2.strip(), "return_code": rc}
-        container_id = o2.strip()
-        created = False
-
-    return {"error": False, "container_id": container_id, "created": created, "name": name, "image": image}
-
-
-@mcp.tool(
-    name="run_command",
-    title="Run Command",
-    description="Execute a system command. Supports stdin, working directory, timeout and output truncation.",
-)
-async def run_command(
-    command: str,
-    stdin: str = "",
-    workdir: Optional[str] = None,
-    timeout: Optional[float] = None,
-    shell: bool = True,
-    max_output_bytes: int = 200_000,
-) -> dict:
-    """Execute a command and return structured segments.
-
-    Returns a dict with segments list: each segment has name and text.
-    Errors return is_error True and may omit stdout if not produced.
-    """
     try:
         result = await run_subprocess(
             command,
-            stdin=stdin,
-            workdir=workdir,
-            timeout=timeout,
-            shell=shell,
-            max_output_bytes=max_output_bytes,
+            shell=True,
         )
+        segments = []
+        if result.stdout:
+            segments.append({"name": "STDOUT", "text": result.stdout})
+        if result.stderr:
+            segments.append({"name": "STDERR", "text": result.stderr})
+        meta = {
+            "exit_code": result.code,
+            "truncated": result.truncated,
+            "timeout": result.timeout,
+            "command": command,
+        }
+        is_error = result.code != 0
+        if is_error:
+            meta["is_error"] = True
+        return {"segments": segments, **meta}
     except CommandError as ce:
         return {
             "is_error": True,
             "message": str(ce),
             "command": command,
         }
-    segments = []
-    if result.stdout:
-        segments.append({"name": "STDOUT", "text": result.stdout})
-    if result.stderr:
-        segments.append({"name": "STDERR", "text": result.stderr})
-    meta = {
-        "exit_code": result.code,
-        "truncated": result.truncated,
-        "timeout": result.timeout,
-        "command": command,
-    }
-    is_error = result.code != 0
-    if is_error:
-        meta["is_error"] = True
-    return {"segments": segments, **meta}
 
 
-# @mcp.resource("system://info")
-# def get_system_info():
-#     """Get basic system information"""
-#     import platform
-#     import os
+# @mcp.tool(
+#     name="run_command",
+#     title="Run Command in the Sandbox",
+#     description="Execute a command inside the sandbox container. Supports stdin, timeout and output truncation.",
+# )
+# async def run_command(
+#     command: str,
+#     stdin: str = "",
+#     timeout: Optional[float] = None,
+#     shell: bool = True,
+#     max_output_bytes: int = 200_000,
+# ) -> dict:
+#     """Execute a command inside the sandbox container and return structured segments.
 
-#     return {
-#         "platform": platform.platform(),
-#         "python_version": platform.python_version(),
-#         "working_directory": os.getcwd(),
-#         "user": os.getenv("USER", "unknown"),
+#     Returns a dict with segments list: each segment has name and text.
+#     Errors return is_error True and may omit stdout if not produced.
+#     """
+#     # Use stdin to pipe the script into the container for robust multi-line support
+#     docker_command = "docker exec -i sandbox sh"
+
+#     try:
+#         # If stdin is provided, prepend the command to it; otherwise, use command as stdin
+#         script = command if not stdin else f"{command}\n{stdin}"
+#         result = await run_subprocess(
+#             docker_command,
+#             stdin=script,
+#             timeout=timeout,
+#             shell=shell,
+#             max_output_bytes=max_output_bytes,
+#         )
+#     except CommandError as ce:
+#         return {
+#             "is_error": True,
+#             "message": str(ce),
+#             "command": command,
+#         }
+#     segments = []
+#     if result.stdout:
+#         segments.append({"name": "STDOUT", "text": result.stdout})
+#     if result.stderr:
+#         segments.append({"name": "STDERR", "text": result.stderr})
+#     meta = {
+#         "exit_code": result.code,
+#         "truncated": result.truncated,
+#         "timeout": result.timeout,
+#         "command": command,
 #     }
+#     is_error = result.code != 0
+#     if is_error:
+#         meta["is_error"] = True
+#     return {"segments": segments, **meta}
 
 
-@mcp.prompt
-def command_help() -> str:
-    return (
-        "Run shell commands. Parameters: command (required), stdin (optional string), workdir (path), timeout (seconds), shell (bool), max_output_bytes (int). "
-        "Returns segments STDOUT/STDERR; sets is_error when exit_code != 0. Output may be truncated with marker."
-    )
+# @mcp.prompt
+# def command_help() -> str:
+#     return (
+#         "Run shell commands inside the sandbox container. Parameters: command (required), stdin (optional string), timeout (seconds), shell (bool), max_output_bytes (int). "
+#         "Returns segments STDOUT/STDERR; sets is_error when exit_code != 0. Output may be truncated with marker."
+#     )
 
 
 @mcp.tool(
@@ -293,27 +123,62 @@ async def write_to_file(path: str, content: str) -> dict:
         path="~/output.txt",
         content="Full file content here"
     """
+    await ensure_sandbox_exists()
+
+    # Normalize potential accidental code fences
+    if content.startswith("```") and content.endswith("```"):
+        lines = content.splitlines()
+        if len(lines) >= 2:
+            inner = lines[1:-1]
+            content = "\n".join(inner) + ("\n" if content.endswith("\n```") else "")
+
+    # Write the file inside the sandbox container
+    # Use /workspace as the root inside the container
+    from shlex import quote
+    import os
+
+    # If path is absolute, use as is; if relative, prepend /workspace
+    container_path = path
+    if not os.path.isabs(container_path):
+        container_path = f"/workspace/{container_path}"
+    # Ensure parent directories exist inside the container
+    mkdir_cmd = f"mkdir -p $(dirname {quote(container_path)})"
+    # Write content using echo and redirection (handle special chars with printf)
+    # Use base64 to avoid shell escaping issues
+    import base64
+
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    write_cmd = f"echo '{encoded}' | base64 -d > {quote(container_path)}"
+    full_cmd = f"{mkdir_cmd} && {write_cmd}"
+    docker_cmd = f"docker exec sandbox sh -c {quote(full_cmd)}"
+
     try:
-        p = Path(path).expanduser().resolve()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Normalize potential accidental code fences
-        if content.startswith("```") and content.endswith("```"):
-            # remove first and last fence line
-            lines = content.splitlines()
-            if len(lines) >= 2:
-                # drop first and last
-                inner = lines[1:-1]
-                content = "\n".join(inner) + ("\n" if content.endswith("\n```") else "")
-        data = content
-        p.write_text(data, encoding="utf-8")
+        result = await run_subprocess(docker_cmd, shell=True)
+        if result.code != 0:
+            return {
+                "is_error": True,
+                "message": result.stderr or "Unknown error",
+                "path": path,
+            }
+        # Get file size inside container
+        stat_cmd = f"docker exec sandbox sh -c 'stat -c %s {quote(container_path)}'"
+        stat_result = await run_subprocess(stat_cmd, shell=True)
+        if stat_result.code == 0 and stat_result.stdout:
+            bytes_written = int(stat_result.stdout.strip())
+        else:
+            bytes_written = len(content.encode("utf-8"))
         return {
-            "path": str(p),
-            "bytes_written": len(data.encode("utf-8")),
-            "created": not p.exists(),  # always False after write; placeholder kept for schema similarity
+            "path": container_path,
+            "bytes_written": bytes_written,
+            "created": True,  # always True for this context
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
     except Exception as e:
-        return {"is_error": True, "message": f"Failed to write file: {e}", "path": path}
+        return {
+            "is_error": True,
+            "message": f"Failed to write file in sandbox: {e}",
+            "path": path,
+        }
 
 
 @mcp.tool(
@@ -334,13 +199,40 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
             {"search": "another_old", "replace": "another_new"},
         ]
     """
-    p = Path(path).expanduser()
-    if not p.exists():
+    await ensure_sandbox_exists()
+
+    import os
+    from shlex import quote
+    import base64
+
+    # If path is absolute, use as is; if relative, prepend /workspace
+    container_path = path
+    if not os.path.isabs(container_path):
+        container_path = f"/workspace/{container_path}"
+
+    # Check if file exists in container
+    check_cmd = f"docker exec sandbox sh -c 'test -f {quote(container_path)}'"
+    check_result = await run_subprocess(check_cmd, shell=True)
+    if check_result.code != 0:
         return {"is_error": True, "message": "File does not exist", "path": path}
+
+    # Read file content from container (base64 to avoid encoding issues)
+    read_cmd = f"docker exec sandbox sh -c 'base64 {quote(container_path)}'"
+    read_result = await run_subprocess(read_cmd, shell=True)
+    if read_result.code != 0 or not read_result.stdout:
+        return {
+            "is_error": True,
+            "message": f"Failed to read file: {read_result.stderr or 'Unknown error'}",
+            "path": path,
+        }
     try:
-        original = p.read_text(encoding="utf-8")
+        original = base64.b64decode(read_result.stdout.encode("utf-8")).decode("utf-8")
     except Exception as e:
-        return {"is_error": True, "message": f"Failed to read file: {e}", "path": path}
+        return {
+            "is_error": True,
+            "message": f"Failed to decode file: {e}",
+            "path": path,
+        }
 
     modified = original
     applied = []
@@ -348,7 +240,9 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
         search = entry.get("search")
         replace = entry.get("replace", "")
         if search is None:
-            applied.append({"index": idx, "status": "skipped", "reason": "missing search"})
+            applied.append(
+                {"index": idx, "status": "skipped", "reason": "missing search"}
+            )
             continue
         if search not in modified:
             applied.append({"index": idx, "status": "not-found"})
@@ -357,15 +251,23 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
         modified = modified.replace(search, replace)
         applied.append({"index": idx, "status": "replaced", "occurrences": occurrences})
 
-    if modified != original:
-        try:
-            p.write_text(modified, encoding="utf-8")
-        except Exception as e:
-            return {"is_error": True, "message": f"Failed to write file: {e}", "path": path}
+    changed = modified != original
+    if changed:
+        # Write back to file in container using base64
+        encoded = base64.b64encode(modified.encode("utf-8")).decode("ascii")
+        write_cmd = f"echo '{encoded}' | base64 -d > {quote(container_path)}"
+        docker_cmd = f"docker exec sandbox sh -c {quote(write_cmd)}"
+        write_result = await run_subprocess(docker_cmd, shell=True)
+        if write_result.code != 0:
+            return {
+                "is_error": True,
+                "message": f"Failed to write file: {write_result.stderr or 'Unknown error'}",
+                "path": path,
+            }
 
     return {
-        "path": str(p.resolve()),
-        "changed": modified != original,
+        "path": container_path,
+        "changed": changed,
         "replacements": applied,
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
