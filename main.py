@@ -125,27 +125,60 @@ async def write_to_file(path: str, content: str) -> dict:
     """
     await ensure_sandbox_exists()
 
+    # Normalize potential accidental code fences
+    if content.startswith("```") and content.endswith("```"):
+        lines = content.splitlines()
+        if len(lines) >= 2:
+            inner = lines[1:-1]
+            content = "\n".join(inner) + ("\n" if content.endswith("\n```") else "")
+
+    # Write the file inside the sandbox container
+    # Use /workspace as the root inside the container
+    from shlex import quote
+    import os
+
+    # If path is absolute, use as is; if relative, prepend /workspace
+    container_path = path
+    if not os.path.isabs(container_path):
+        container_path = f"/workspace/{container_path}"
+    # Ensure parent directories exist inside the container
+    mkdir_cmd = f"mkdir -p $(dirname {quote(container_path)})"
+    # Write content using echo and redirection (handle special chars with printf)
+    # Use base64 to avoid shell escaping issues
+    import base64
+
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    write_cmd = f"echo '{encoded}' | base64 -d > {quote(container_path)}"
+    full_cmd = f"{mkdir_cmd} && {write_cmd}"
+    docker_cmd = f"docker exec sandbox sh -c {quote(full_cmd)}"
+
     try:
-        p = Path(path).expanduser().resolve()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Normalize potential accidental code fences
-        if content.startswith("```") and content.endswith("```"):
-            # remove first and last fence line
-            lines = content.splitlines()
-            if len(lines) >= 2:
-                # drop first and last
-                inner = lines[1:-1]
-                content = "\n".join(inner) + ("\n" if content.endswith("\n```") else "")
-        data = content
-        p.write_text(data, encoding="utf-8")
+        result = await run_subprocess(docker_cmd, shell=True)
+        if result.code != 0:
+            return {
+                "is_error": True,
+                "message": result.stderr or "Unknown error",
+                "path": path,
+            }
+        # Get file size inside container
+        stat_cmd = f"docker exec sandbox sh -c 'stat -c %s {quote(container_path)}'"
+        stat_result = await run_subprocess(stat_cmd, shell=True)
+        if stat_result.code == 0 and stat_result.stdout:
+            bytes_written = int(stat_result.stdout.strip())
+        else:
+            bytes_written = len(content.encode("utf-8"))
         return {
-            "path": str(p),
-            "bytes_written": len(data.encode("utf-8")),
-            "created": not p.exists(),  # always False after write; placeholder kept for schema similarity
+            "path": container_path,
+            "bytes_written": bytes_written,
+            "created": True,  # always True for this context
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
     except Exception as e:
-        return {"is_error": True, "message": f"Failed to write file: {e}", "path": path}
+        return {
+            "is_error": True,
+            "message": f"Failed to write file in sandbox: {e}",
+            "path": path,
+        }
 
 
 @mcp.tool(
