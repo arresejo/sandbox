@@ -8,42 +8,6 @@ mcp = FastMCP("Sandbox")
 
 
 @mcp.tool(
-    title="Spawn a sandbox",
-    description="Create sandbox container, only if it's not already running. If it's already running then it's ok, does nothing. This sandbox is meant to receive and run the commands.",
-)
-async def spawn_sandbox() -> dict:
-    command = "docker run -d --name sandbox sandbox-image tail -f /dev/null"
-
-    try:
-        result = await run_subprocess(
-            command,
-            shell=True,
-        )
-        segments = []
-        if result.stdout:
-            segments.append({"name": "STDOUT", "text": result.stdout})
-        if result.stderr:
-            segments.append({"name": "STDERR", "text": result.stderr})
-        meta = {
-            "exit_code": result.code,
-            "truncated": result.truncated,
-            "timeout": result.timeout,
-            "command": command,
-            "container_id": result.stdout.strip() if result.stdout else None,
-        }
-        is_error = result.code != 0
-        if is_error:
-            meta["is_error"] = True
-        return {"segments": segments, **meta}
-    except CommandError as ce:
-        return {
-            "is_error": True,
-            "message": str(ce),
-            "command": command,
-        }
-
-
-@mcp.tool(
     title="List files in the sandbox",
     description="List the files in the sandbox workspace directory",
 )
@@ -211,7 +175,9 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
         search = entry.get("search")
         replace = entry.get("replace", "")
         if search is None:
-            applied.append({"index": idx, "status": "skipped", "reason": "missing search"})
+            applied.append(
+                {"index": idx, "status": "skipped", "reason": "missing search"}
+            )
             continue
         if search not in modified:
             applied.append({"index": idx, "status": "not-found"})
@@ -224,7 +190,11 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
         try:
             p.write_text(modified, encoding="utf-8")
         except Exception as e:
-            return {"is_error": True, "message": f"Failed to write file: {e}", "path": path}
+            return {
+                "is_error": True,
+                "message": f"Failed to write file: {e}",
+                "path": path,
+            }
 
     return {
         "path": str(p.resolve()),
