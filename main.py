@@ -443,7 +443,7 @@ async def push_files(repo_name="default_name") -> dict:
     # 5. Run each command, collect output
     results = []
     for cmd in cmds:
-        docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' -e GITHUB_TOKEN='{gh_token}' -w {workdir} sandbox sh -c {quote(cmd)}"
+        docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' -w {workdir} sandbox sh -c {quote(cmd)}"
         try:
             res = await run_subprocess(docker_cmd, shell=True)
             results.append(
