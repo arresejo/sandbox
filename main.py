@@ -3,6 +3,7 @@ from fastmcp import FastMCP
 from command_exec import run_subprocess, CommandError
 from datetime import datetime
 from pathlib import Path
+from utils.init_sandbox import ensure_sandbox_exists
 
 mcp = FastMCP("Sandbox")
 
@@ -11,6 +12,7 @@ mcp = FastMCP("Sandbox")
     title="List files in the sandbox",
     description="List the files in the sandbox workspace directory",
 )
+@ensure_sandbox_exists
 async def list_files() -> dict:
     command = "docker exec sandbox ls /workspace -la"
 
@@ -47,6 +49,7 @@ async def list_files() -> dict:
     title="Run Command in the Sandbox",
     description="Execute a command inside the sandbox container. Supports stdin, timeout and output truncation.",
 )
+@ensure_sandbox_exists
 async def run_command(
     command: str,
     stdin: str = "",
@@ -108,6 +111,7 @@ async def run_command(
     title="Write File (create/overwrite)",
     description="Create or overwrite a text file with provided full content. Creates parent directories as needed.",
 )
+@ensure_sandbox_exists
 async def write_to_file(path: str, content: str) -> dict:
     """Create or overwrite a file atomically-ish.
 
@@ -148,6 +152,7 @@ async def write_to_file(path: str, content: str) -> dict:
     title="Replace In File",
     description="Apply multiple search/replace edits to an existing text file. Each replacement is literal (no regex).",
 )
+@ensure_sandbox_exists
 async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     """Perform targeted replacements.
 
