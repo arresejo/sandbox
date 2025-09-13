@@ -76,7 +76,7 @@ Return shape:
 
 ## deploy
 
-Description: Create a new GitHub repository using the `gh` CLI and push the contents of the sandbox to it. Requires the `gh-api-key` Bearer header to be set on the tool call (this is the GitHub API token). The tool will create the repo, initialize git if needed, commit all files, and push to the new repo.
+Description: Deploy written files to a new GitHub repository using the `gh` CLI and push the contents the written files to it. A new repository is created.
 
 Parameters (match `main.py` implementation):
 
@@ -93,14 +93,14 @@ Return shape:
 
 Usage example (tool call):
 <deploy>
-<repo_name>my-sandbox-repo</repo_name>
+<repo_name>my-repo</repo_name>
 <visibility>public</visibility>
-<description>Demo repo created from sandbox</description>
+<description>Demo repo created with Mistral</description>
 </deploy>
 
 Example success response (conceptual):
 {
-"repo_url": "https://github.com/username/my-sandbox-repo",
+"repo_url": "https://github.com/username/my-repo",
 "status": "success",
 "stdout": "...gh cli output..."
 }

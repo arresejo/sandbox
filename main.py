@@ -4,6 +4,7 @@ from datetime import datetime
 from utils.init_sandbox import ensure_sandbox_exists
 from shlex import quote
 import os
+from fastmcp.server.dependencies import get_http_headers
 
 # Use base64 to avoid shell escaping issues
 import base64
@@ -208,10 +209,11 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
 
 
 # --- DEPLOY TOOL ---
+# https://gofastmcp.com/servers/context#http-headers
 @mcp.tool(
     name="deploy",
     title="Deploy Sandbox to New GitHub Repo",
-    description="Creates a new GitHub repo using the gh CLI and pushes the contents of the sandbox to it. Requires the 'gh-api-key' Bearer header.",
+    description="Creates a new GitHub repo and pushes the contents of the sandbox to it.",
 )
 async def deploy(
     repo_name: str, visibility: str = "private", description: str = ""
@@ -225,13 +227,18 @@ async def deploy(
     Returns:
         Dict with repo URL and status
     """
-
+    print("DEPLOY CALLED")
     await ensure_sandbox_exists()
 
     # Get the GitHub API key from the Bearer header
     # The MCP runtime should provide this in the tool call context
-    gh_token = mcp.context.headers.get("gh-api-key")
-    print("gh_token", gh_token)
+    try:
+        headers = get_http_headers()
+        print("headers", headers)
+        gh_token = headers.get("gh-api-key")
+        print("gh_token", gh_token)
+    except Exception as e:
+        print(e)
 
     if not gh_token:
         return {
