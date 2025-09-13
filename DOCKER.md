@@ -1,6 +1,8 @@
 ## Build docker image
 
+```bash
 docker build -t sandbox-image .
+```
 
 ## [TOOL TO IMPLEMENT] SPAWN
 
