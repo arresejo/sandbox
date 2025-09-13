@@ -73,8 +73,6 @@ RUN apt-get update && \
        npm && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copier le code de l’app / du script
-COPY . .
 
 # Créer un utilisateur non-root
 RUN useradd --create-home --shell /bin/bash sandboxuser && \
