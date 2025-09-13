@@ -44,6 +44,20 @@ uv run main.py
          - `recreate` (bool, default False) remove existing then create new
      - Response: `{ error: bool, container_id?, created?, name, image, message?, stderr? }`
 
+3. `read_file`
+     - Read full textual contents of a file inside project root (<=500KB, UTF-8, non-binary).
+     - Parameters:
+         - `path` (str, required): File path (relative or absolute; `~` expanded).
+     - Response: `{ path, content, truncated, size, timestamp }` or `{ is_error, message }`.
+     - Example: `read_file({"path": "main.py"})`.
+
+4. `list_file`
+     - List (non-recursive) directory entries up to 500 items.
+     - Parameters:
+         - `path` (str, optional, default "."): Directory path.
+     - Response: `{ path, entries:[{name,type,size?}], truncated, count, timestamp }` or `{ is_error, message }`.
+     - Example: `list_file({"path": "src"})`.
+
 ### Prompt
 
 `command_help` – concise guidance for using `run_command` including parameters and error semantics.
