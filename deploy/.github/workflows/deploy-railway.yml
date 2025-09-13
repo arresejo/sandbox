@@ -6,11 +6,5 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    container: ghcr.io/railwayapp/cli:latest
-    env:
-      SVC_ID: sandbox
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-    steps:
-      - uses: actions/checkout@v3
-      - run: railway up --service=${{ env.SVC_ID }}
+    uses: arresejo/sandbox-infra/.github/workflows/deploy-railway.yml@main
+    secrets: inherit
