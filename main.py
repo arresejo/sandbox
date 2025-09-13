@@ -158,31 +158,31 @@ Return shape:
 async def get_workspace_public_url() -> dict:
     await ensure_sandbox_exists()
 
-    # Start http.server in background (no --directory, no trailing &)
-    command_server = "docker exec -d sandbox python -m http.server 8000"
-    await run_subprocess(command_server, shell=True)
-
-    # Start ngrok in background (no trailing &)
-    command_ngrok = (
-        "docker exec -d sandbox "
-        "ngrok http 8000 --authtoken 32ed1S5ECXtWJt2An8iA2RgyAeD_78Ti6KXPwdm5pqugvgu2p --log=stdout"
+    # start http.server (serves /workspace)
+    await run_subprocess(
+        "docker exec -d sandbox python -m http.server 8000", shell=True
     )
-    await run_subprocess(command_ngrok, shell=True)
-    # Give ngrok a moment to initialize
-    import time, requests
 
-    time.sleep(3)
+    # start ngrok
+    await run_subprocess(
+        "docker exec -d sandbox ngrok http 8000 --authtoken 32ed1S5ECXtWJt2An8iA2RgyAeD_78Ti6KXPwdm5pqugvgu2p --log=stdout",
+        shell=True,
+    )
 
-    try:
-        # Query ngrok's local API inside container, port mapped to host
-        resp = requests.get("http://127.0.0.1:4040/api/tunnels")
-        tunnels = resp.json().get("tunnels", [])
-        if tunnels:
-            return {"is_error": False, "url": tunnels[0]["public_url"]}
-    except Exception as e:
-        return {"is_error": True, "message": str(e)}
+    # fetch public URL via ngrok's local API *inside* the container
+    cmd = "docker exec sandbox sh -c 'curl -s http://127.0.0.1:4040/api/tunnels | jq -r \".tunnels[0].public_url\"'"
+    result = await run_subprocess(cmd, shell=True)
 
-    return {"is_error": True, "message": "No public URL found"}
+    if (
+        result.code == 0
+        and result.stdout
+        and result.stdout.strip()
+        and result.stdout.strip() != "null"
+    ):
+        url = result.stdout.strip()
+        return {"is_error": False, "url": url}
+
+    return {"is_error": True, "message": result.stderr or "No public URL found"}
 
 
 @mcp.tool(
