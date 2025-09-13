@@ -3,6 +3,8 @@ import os
 from typing import Optional
 from fastmcp import FastMCP
 from command_exec import run_subprocess, CommandError
+from datetime import datetime
+from pathlib import Path
 
 mcp = FastMCP("Server")
 
@@ -179,6 +181,101 @@ def command_help() -> str:
         "Run shell commands. Parameters: command (required), stdin (optional string), workdir (path), timeout (seconds), shell (bool), max_output_bytes (int). "
         "Returns segments STDOUT/STDERR; sets is_error when exit_code != 0. Output may be truncated with marker."
     )
+
+
+@mcp.tool(
+    name="write_to_file",
+    title="Write File (create/overwrite)",
+    description="Create or overwrite a text file with provided full content. Creates parent directories as needed.",
+)
+async def write_to_file(path: str, content: str) -> dict:
+    """Create or overwrite a file atomically-ish.
+
+    Args:
+        path: Target file path (relative or absolute)
+        content: Entire desired file content
+    Returns:
+        Metadata including bytes_written and absolute path
+    Args Example:
+        path="~/output.txt",
+        content="Full file content here"
+    """
+    try:
+        p = Path(path).expanduser().resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Normalize potential accidental code fences
+        if content.startswith("```") and content.endswith("```"):
+            # remove first and last fence line
+            lines = content.splitlines()
+            if len(lines) >= 2:
+                # drop first and last
+                inner = lines[1:-1]
+                content = "\n".join(inner) + ("\n" if content.endswith("\n```") else "")
+        data = content
+        p.write_text(data, encoding="utf-8")
+        return {
+            "path": str(p),
+            "bytes_written": len(data.encode("utf-8")),
+            "created": not p.exists(),  # always False after write; placeholder kept for schema similarity
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+    except Exception as e:
+        return {"is_error": True, "message": f"Failed to write file: {e}", "path": path}
+
+
+@mcp.tool(
+    name="replace_in_file",
+    title="Replace In File",
+    description="Apply multiple search/replace edits to an existing text file. Each replacement is literal (no regex).",
+)
+async def replace_in_file(path: str, replacements: list[dict]) -> dict:
+    """Perform targeted replacements.
+
+    Args:
+        path: File to modify
+        replacements: list of {"search": str, "replace": str}
+    Returns metadata with counts.
+    Args Example:
+        replacements=[
+            {"search": "old_text", "replace": "new_text"},
+            {"search": "another_old", "replace": "another_new"},
+        ]
+    """
+    p = Path(path).expanduser()
+    if not p.exists():
+        return {"is_error": True, "message": "File does not exist", "path": path}
+    try:
+        original = p.read_text(encoding="utf-8")
+    except Exception as e:
+        return {"is_error": True, "message": f"Failed to read file: {e}", "path": path}
+
+    modified = original
+    applied = []
+    for idx, entry in enumerate(replacements):
+        search = entry.get("search")
+        replace = entry.get("replace", "")
+        if search is None:
+            applied.append({"index": idx, "status": "skipped", "reason": "missing search"})
+            continue
+        if search not in modified:
+            applied.append({"index": idx, "status": "not-found"})
+            continue
+        occurrences = modified.count(search)
+        modified = modified.replace(search, replace)
+        applied.append({"index": idx, "status": "replaced", "occurrences": occurrences})
+
+    if modified != original:
+        try:
+            p.write_text(modified, encoding="utf-8")
+        except Exception as e:
+            return {"is_error": True, "message": f"Failed to write file: {e}", "path": path}
+
+    return {
+        "path": str(p.resolve()),
+        "changed": modified != original,
+        "replacements": applied,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
 
 
 if __name__ == "__main__":
