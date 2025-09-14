@@ -159,13 +159,11 @@ async def get_workspace_public_url() -> dict:
     await ensure_sandbox_exists()
 
     # start http.server (serves /workspace)
-    await run_subprocess(
-        "docker exec -d sandbox python -m http.server 8000", shell=True
-    )
+    await run_subprocess("docker exec -d sandbox python -m http.server 8000", shell=True)
 
     # start ngrok
     await run_subprocess(
-        "docker exec -d sandbox ngrok http 8000 --authtoken 32ed1S5ECXtWJt2An8iA2RgyAeD_78Ti6KXPwdm5pqugvgu2p --log=stdout",
+        "docker exec -d sandbox ngrok http 8000 --authtoken 32fJJe11lRDxdhY2ZVFyYDU4jzP_6MnjiP9U6X5MkkSe6ACdF --log=stdout",
         shell=True,
     )
 
@@ -173,12 +171,7 @@ async def get_workspace_public_url() -> dict:
     cmd = "docker exec sandbox sh -c 'curl -s http://127.0.0.1:4040/api/tunnels | jq -r \".tunnels[0].public_url\"'"
     result = await run_subprocess(cmd, shell=True)
 
-    if (
-        result.code == 0
-        and result.stdout
-        and result.stdout.strip()
-        and result.stdout.strip() != "null"
-    ):
+    if result.code == 0 and result.stdout and result.stdout.strip() and result.stdout.strip() != "null":
         url = result.stdout.strip()
         return {"is_error": False, "url": url}
 

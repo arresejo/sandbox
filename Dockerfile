@@ -1,105 +1,87 @@
 # syntax = docker/dockerfile:1.4
 
 ########################################
-# Étape de build : compiler / installer #
+# Étape build : construire les wheels   #
 ########################################
 FROM python:3.12-slim-bullseye AS builder
 
-# Variables d'environnement pour Python
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /build
 
-# Installer dépendances système pour build
+# Déps système nécessaires pour compiler les libs Python
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-       build-essential \
-       gcc \
-       libffi-dev \
-       libssl-dev \
-       libxml2-dev \
-       libxslt1-dev \
-       zlib1g-dev \
-       libjpeg-dev \
-       curl \
-       git \
-       ca-certificates && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# # Installer Node.js + npm pour builder ou usage
-# RUN apt-get update && \
-#     apt-get install -y --no-install-recommends \
-#        nodejs \
-#        npm && \
-#     apt-get clean && rm -rf /var/lib/apt/lists/*
+       build-essential gcc \
+       libffi-dev libssl-dev \
+       libxml2-dev libxslt1-dev \
+       zlib1g-dev libjpeg-dev \
+       curl git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copier le fichier des deps Python
 COPY requirements.txt .
 
-# Construire / installer toutes les librairies Python
-RUN python3 -m pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Construire des wheels (binaries réutilisables) pour toutes les deps
+RUN python -m pip install --upgrade pip wheel && \
+    pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+
 
 #########################################
-# Étape runtime : image finale plus légère #
+# Étape runtime : image finale légère    #
 #########################################
 FROM python:3.12-slim-bullseye AS runtime
 
-# Variables d'environnement
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive \
     PATH="/workspace/node_modules/.bin:${PATH}"
 
-# Set working directory inside container
 WORKDIR /workspace
 
-# Installer les dépendances runtime nécessaires (non-builder)
-RUN apt-get update && \
+# Outils runtime + GH CLI + ngrok
+RUN set -eux; \
+    apt-get update; \
     apt-get install -y --no-install-recommends \
-        unzip \
-        jq \
-        ffmpeg \
-        curl \
-        git \
-        wget
+        unzip jq ffmpeg curl git wget ca-certificates gnupg; \
+    # Installer GitHub CLI (dépôt officiel)
+    mkdir -p -m 755 /etc/apt/keyrings; \
+    wget -qO /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg; \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    # Installer ngrok binaire
+    curl -sSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip -o /tmp/ngrok.zip; \
+    unzip /tmp/ngrok.zip -d /usr/local/bin; \
+    rm -f /tmp/ngrok.zip; \
+    # Nettoyage APT
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
-# Instal gh CLI
-RUN  mkdir -p -m 755 /etc/apt/keyrings \
-	&& out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-	&& cat $out | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
-	&& chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-	&& mkdir -p -m 755 /etc/apt/sources.list.d \
-	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-	&& apt update \
-	&& apt install gh -y
+# Copier requirements et wheels depuis le builder et installer
+COPY requirements.txt /workspace/requirements.txt
+COPY --from=builder /wheels /wheels
+RUN python -m pip install --upgrade pip && \
+    pip install --no-cache-dir --no-index --find-links=/wheels -r /workspace/requirements.txt && \
+    rm -rf /wheels
 
-# Install ngrok
-RUN curl -s https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip -o ngrok.zip \
-        && unzip ngrok.zip \
-        && mv ngrok /usr/local/bin/ \
-        && rm ngrok.zip
-
-# Copier les dépendances Python déjà construites depuis builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# (Optionnel) installer Node.js runtime si besoin
-# Si tu veux une version plus récente de Node, tu peux l’installer ici
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-       nodejs \
-       npm && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
+# (Optionnel) Installer Node.js + npm (décommente si nécessaire)
+# RUN set -eux; \
+#     apt-get update; \
+#     apt-get install -y --no-install-recommends nodejs npm; \
+#     apt-get clean; \
+#     rm -rf /var/lib/apt/lists/*
 
 # Créer un utilisateur non-root
 RUN useradd --create-home --shell /bin/bash sandboxuser && \
-    chown -R sandboxuser /workspace
-
+    mkdir -p /workspace && chown -R sandboxuser:sandboxuser /workspace
 USER sandboxuser
 
-# Commande par défaut (tu pourras override)
-CMD ["bash"]
-# Expose the HTTP server port and ngrok API port
+# Ports : serveur HTTP app + API ngrok
 EXPOSE 8000 4040
+
+# Commande par défaut
+CMD ["bash"]
