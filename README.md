@@ -1,4 +1,16 @@
-# Sandbox
+# Le Bac à Sable
+
+Add a sandbox to **Le Chat** to supercharge its capabilities. Iterate on your files and datasets directly in your sandbox and deploy your product—all from Le Chat.
+
+Le Bac à Sable attaches a Linux container sandbox to every chat, enabling the model to create, modify, and execute files during the conversation. While Mistral Medium excels at coding tasks, the native code interpreter tool has limitations. This is especially useful when working with medium to large files or transferring them between tools.
+
+## Examples
+
+- Ask Le Chat to download and clean a dataset. Le Bac à Sable’s MCP provides a tool to run commands for that.  
+- Build a full-stack app, iterate on the generated code, and deploy it—all from Le Chat.  
+- Convert video or audio files to your desired format.  
+- …and more 🚀
+---
 
 ## Installation
 
