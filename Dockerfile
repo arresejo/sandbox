@@ -24,8 +24,7 @@ RUN apt-get update && \
 # Copier le fichier des deps Python
 COPY requirements.txt .
 
-# Construire des wheels (binaries réutilisables) pour toutes les deps
-# Assurez-vous que requirements.txt inclut: fastapi, uvicorn, pydantic (et vos autres deps)
+# Construire des wheels (assurez-vous que requirements inclut fastapi, uvicorn, pydantic)
 RUN python -m pip install --upgrade pip wheel && \
     pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
@@ -42,7 +41,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Répertoire de travail (racine du "sandbox")
 WORKDIR /workspace
 
-# Outils runtime + GH CLI (conservés). Ngrok supprimé (inutile sur Railway).
+# Outils runtime + GH CLI (conservés). Ngrok supprimé.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -65,7 +64,7 @@ RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir --no-index --find-links=/wheels -r /workspace/requirements.txt && \
     rm -rf /wheels
 
-# Copier votre code (incluant sandbox_api.py)
+# Copier votre code (incluant sandbox_api.py avec app = FastAPI())
 COPY . /workspace
 
 # Créer un utilisateur non-root
@@ -73,14 +72,16 @@ RUN useradd --create-home --shell /bin/bash sandboxuser && \
     mkdir -p /workspace && chown -R sandboxuser:sandboxuser /workspace
 USER sandboxuser
 
-# Exposer le port applicatif (Railway fournit $PORT dynamiquement)
+# Exposer le port applicatif (Railway fournira $PORT à l'exécution)
 EXPOSE 8000
 
-# Santé basique (optionnel)
+# (Optionnel) Healthcheck simple
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import socket,os; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', int(os.environ.get('PORT','8000')))); s.close()"
 
-# Lancer l'API sandbox (FastAPI via uvicorn) en écoutant sur $PORT
-# Assurez-vous que sandbox_api.py contient: app = FastAPI()
+# Valeur par défaut pour tests locaux; Railway définira PORT automatiquement
 ENV PORT=8000
-CMD ["python", "-m", "uvicorn", "sandbox_api:app", "--host", "0.0.0.0", "--port", "%PORT%"]
+ENV PYTHONPATH=/workspace
+
+# IMPORTANT: utiliser la forme shell pour que $PORT s'expanse correctement
+CMD sh -lc "uvicorn sandbox_api:app --host 0.0.0.0 --port ${PORT:-8000}"
