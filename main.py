@@ -4,13 +4,13 @@ from command_exec import run_subprocess, CommandError
 from datetime import datetime
 from utils.init_sandbox import ensure_sandbox_exists
 from shlex import quote
-from pathlib import Path  # https://gofastmcp.com/servers/tools#paths
 import os
 
 from fastmcp.server.dependencies import get_http_headers
 
 # Load environment variables from .env if present
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Use base64 to avoid shell escaping issues
@@ -169,7 +169,9 @@ async def get_workspace_public_url() -> dict:
     await ensure_sandbox_exists()
 
     # start http.server (serves /workspace)
-    await run_subprocess("docker exec -d sandbox python -m http.server 8000", shell=True)
+    await run_subprocess(
+        "docker exec -d sandbox python -m http.server 8000", shell=True
+    )
 
     # start ngrok using auth token from environment
     ngrok_token = os.getenv("NGROK_AUTHTOKEN")
@@ -185,7 +187,12 @@ async def get_workspace_public_url() -> dict:
     cmd = "docker exec sandbox sh -c 'curl -s http://127.0.0.1:4040/api/tunnels | jq -r \".tunnels[0].public_url\"'"
     result = await run_subprocess(cmd, shell=True)
 
-    if result.code == 0 and result.stdout and result.stdout.strip() and result.stdout.strip() != "null":
+    if (
+        result.code == 0
+        and result.stdout
+        and result.stdout.strip()
+        and result.stdout.strip() != "null"
+    ):
         url = result.stdout.strip()
         return {"is_error": False, "url": url}
 
@@ -288,7 +295,7 @@ async def run_command(
     title="Write File (create/overwrite)",
     description="Create or overwrite a text file with provided full content. Creates parent directories as needed.",
 )
-async def write_to_file(path: Path, content: str) -> dict:
+async def write_to_file(path: str, content: str) -> dict:
     """Create or overwrite a file atomically-ish.
 
     Args:
@@ -358,7 +365,7 @@ async def write_to_file(path: Path, content: str) -> dict:
     title="Replace In File",
     description="Apply multiple search/replace edits to an existing text file. Each replacement is literal (no regex).",
 )
-async def replace_in_file(path: Path, replacements: list[dict]) -> dict:
+async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     """Perform targeted replacements.
 
     Args:
