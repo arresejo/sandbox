@@ -25,7 +25,7 @@ async def get_workspace_public_url() -> dict:
 
     # start ngrok
     await run_subprocess(
-        "docker exec -d sandbox ngrok http 8000 --authtoken 32ed1S5ECXtWJt2An8iA2RgyAeD_78Ti6KXPwdm5pqugvgu2p --log=stdout",
+        "docker exec -d sandbox ngrok http 8000 --authtoken 32fJJe11lRDxdhY2ZVFyYDU4jzP_6MnjiP9U6X5MkkSe6ACdF --log=stdout",
         shell=True,
     )
 
@@ -38,6 +38,61 @@ async def get_workspace_public_url() -> dict:
         return {"is_error": False, "url": url}
 
     return {"is_error": True, "message": result.stderr or "No public URL found"}
+
+@mcp.tool(
+    name="run_command",
+    title="Run Command in the Sandbox",
+    description="Execute a command inside the sandbox container. Supports stdin, timeout and output truncation.",
+)
+async def run_command(
+    command: str,
+    stdin: str = "",
+    timeout: Optional[float] = None,
+    shell: bool = True,
+    max_output_bytes: int = 200_000,
+) -> dict:
+    """Execute a command inside the sandbox container and return structured segments.
+
+    Returns a dict with segments list: each segment has name and text.
+    Errors return is_error True and may omit stdout if not produced.
+    """
+    await ensure_sandbox_exists()
+
+    # Use stdin to pipe the script into the container for robust multi-line support
+    docker_command = "docker exec -i sandbox sh"
+
+    try:
+        # If stdin is provided, prepend the command to it; otherwise, use command as stdin
+        script = command if not stdin else f"{command}\n{stdin}"
+        result = await run_subprocess(
+            docker_command,
+            stdin=script,
+            timeout=timeout,
+            shell=shell,
+            max_output_bytes=max_output_bytes,
+        )
+    except CommandError as ce:
+        return {
+            "is_error": True,
+            "message": str(ce),
+            "command": command,
+        }
+    segments = []
+    if result.stdout:
+        segments.append({"name": "STDOUT", "text": result.stdout})
+    if result.stderr:
+        segments.append({"name": "STDERR", "text": result.stderr})
+    meta = {
+        "exit_code": result.code,
+        "truncated": result.truncated,
+        "timeout": result.timeout,
+        "command": command,
+    }
+    is_error = result.code != 0
+    if is_error:
+        meta["is_error"] = True
+    return {"segments": segments, **meta}
+
 
 @mcp.tool(
     title="List files in the sandbox",
