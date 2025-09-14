@@ -413,7 +413,7 @@ async def push_files(repo_name="default_name") -> dict:
     # 2. Get GH token from special header (injected by infra)
     headers = get_http_headers()
     print("headers", headers)
-    gh_token = headers.get("gh-api-token").split("")[1]
+    gh_token = headers.get("gh-api-token").split(" ")[1]
     print("gh-api-key", gh_token)
 
     if not gh_token:
