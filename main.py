@@ -157,6 +157,11 @@ Parameters:
 
 - `port` (optional, int): port of the server to expose publicly
 
+Usage example (tool call):
+<get_workspace_public_url>
+<port>8888</port>
+</get_workspace_public_url>
+
 Return shape:
 - `url`: the public URL if successful.
 - `is_error` / `message`: present on failure.
@@ -452,78 +457,78 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
     }
 
 
-# @mcp.tool(
-#     title="Push Files to GitHub",
-#     description="Push files in the sandbox to Github, creating a new repository first.",
-# )
-# async def push_files(repo_name: str = "default_name") -> dict:
-#     await ensure_sandbox_exists()
+@mcp.tool(
+    title="Push Files to GitHub",
+    description="Push files in the sandbox to Github, creating a new repository first.",
+)
+async def push_files(repo_name: str = "default_name") -> dict:
+    await ensure_sandbox_exists()
 
-#     # 1. Get repo name (use timestamp for uniqueness)
-#     repo_name = f"sandbox-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-#     org = None  # Optionally set to a GitHub org
-#     full_repo = repo_name if not org else f"{org}/{repo_name}"
+    # 1. Get repo name (use timestamp for uniqueness)
+    repo_name = f"sandbox-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    org = None  # Optionally set to a GitHub org
+    full_repo = repo_name if not org else f"{org}/{repo_name}"
 
-#     # 2. Get GH token from special header (injected by infra)
-#     headers = get_http_headers()
-#     print("headers", headers)
-#     gh_token = headers.get("gh-api-token").split(" ")[1]
-#     print("gh-api-key", gh_token)
+    # 2. Get GH token from special header (injected by infra)
+    headers = get_http_headers()
+    print("headers", headers)
+    gh_token = headers.get("gh-api-token").split(" ")[1]
+    print("gh-api-key", gh_token)
 
-#     if not gh_token:
-#         return {
-#             "is_error": True,
-#             "message": "Missing GitHub API key in environment (GH_API_KEY or gh-api-key)",
-#         }
+    if not gh_token:
+        return {
+            "is_error": True,
+            "message": "Missing GitHub API key in environment (GH_API_KEY or gh-api-key)",
+        }
 
-#     # 4. All commands run inside the sandbox container, in /workspace
-#     cmds = []
-#     # a. Init git if needed
-#     cmds.append("git init -b main")
-#     cmds.append("git config user.email 'sandbox@example.com'")
-#     cmds.append("git config user.name 'sandbox-bot'")
-#     # b. Add all files
-#     cmds.append("git add .")
-#     cmds.append("git commit -m 'Initial commit'")
-#     # c. Create repo with gh CLI
-#     cmds.append(
-#         f"gh repo create {full_repo} --public --source=. --remote=origin --push --confirm"
-#     )
+    # 4. All commands run inside the sandbox container, in /workspace
+    cmds = []
+    # a. Init git if needed
+    cmds.append("git init -b main")
+    cmds.append("git config user.email 'sandbox@example.com'")
+    cmds.append("git config user.name 'sandbox-bot'")
+    # b. Add all files
+    cmds.append("git add .")
+    cmds.append("git commit -m 'Initial commit'")
+    # c. Create repo with gh CLI
+    cmds.append(
+        f"gh repo create {full_repo} --public --source=. --remote=origin --push --confirm"
+    )
 
-#     # d. If gh CLI fails to push, try manual push
-#     cmds.append("git push origin main")
+    # d. If gh CLI fails to push, try manual push
+    cmds.append("git push origin main")
 
-#     # 5. Run each command, collect output
-#     results = []
-#     for cmd in cmds:
-#         docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' sandbox sh -c {quote(cmd)}"
-#         try:
-#             res = await run_subprocess(docker_cmd, shell=True)
-#             results.append(
-#                 {
-#                     "command": cmd,
-#                     "code": res.code,
-#                     "stdout": res.stdout,
-#                     "stderr": res.stderr,
-#                 }
-#             )
-#             if res.code != 0:
-#                 return {
-#                     "is_error": True,
-#                     "message": f"Command failed: {cmd}",
-#                     "results": results,
-#                 }
-#         except CommandError as ce:
-#             return {
-#                 "is_error": True,
-#                 "message": str(ce),
-#                 "command": cmd,
-#                 "results": results,
-#             }
+    # 5. Run each command, collect output
+    results = []
+    for cmd in cmds:
+        docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' sandbox sh -c {quote(cmd)}"
+        try:
+            res = await run_subprocess(docker_cmd, shell=True)
+            results.append(
+                {
+                    "command": cmd,
+                    "code": res.code,
+                    "stdout": res.stdout,
+                    "stderr": res.stderr,
+                }
+            )
+            if res.code != 0:
+                return {
+                    "is_error": True,
+                    "message": f"Command failed: {cmd}",
+                    "results": results,
+                }
+        except CommandError as ce:
+            return {
+                "is_error": True,
+                "message": str(ce),
+                "command": cmd,
+                "results": results,
+            }
 
-#     # 6. Compose repo URL
-#     repo_url = f"https://github.com/{full_repo}"
-#     return {"repo": full_repo, "url": repo_url, "results": results, "is_error": False}
+    # 6. Compose repo URL
+    repo_url = f"https://github.com/{full_repo}"
+    return {"repo": full_repo, "url": repo_url, "results": results, "is_error": False}
 
 
 if __name__ == "__main__":
