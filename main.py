@@ -170,6 +170,7 @@ Return shape:
     description="Start http.server + ngrok inside the sandbox container and return the public URL. This tool allow you to expose the /workspace directory over the internet for easy file access and serving.",
 )
 async def get_workspace_public_url(port: int = 8000) -> dict:
+    print("port", port)
     await ensure_sandbox_exists()
 
     # start http.server (serves /workspace)
