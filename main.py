@@ -1,17 +1,12 @@
 from typing import Optional
 from fastmcp import FastMCP
-from command_exec import run_subprocess, CommandError
 from datetime import datetime
-from utils.init_sandbox import ensure_sandbox_exists
-from shlex import quote
-from pathlib import Path  # https://gofastmcp.com/servers/tools#paths
-import os
+from pathlib import Path
+import os, base64, httpx
 
-from fastmcp.server.dependencies import get_http_headers
-
-# Use base64 to avoid shell escaping issues
-import base64
-
+# Base URL of sandbox API service (must be reachable inside Railway project network)
+SANDBOX_BASE_URL = os.environ.get("SANDBOX_BASE_URL", "sandbox-production-87b4.up.railway.app:3000")
+PORT = int(os.environ.get("PORT", "3000"))
 
 mcp = FastMCP(
     name="Sandbox MCP",
@@ -149,33 +144,27 @@ Return shape:
 """,
 )
 
+# ---------- helpers ----------
+async def _get(path: str, params: dict | None = None):
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{SANDBOX_BASE_URL}{path}", params=params, timeout=60)
+        r.raise_for_status()
+        return r.json()
 
+async def _post(path: str, json: dict):
+    async with httpx.AsyncClient() as client:
+        r = await client.post(f"{SANDBOX_BASE_URL}{path}", json=json, timeout=120)
+        r.raise_for_status()
+        return r.json()
+
+# ---------- tools ----------
 @mcp.tool(
     name="get_workspace_public_url",
     title="Get Workspace Public URL",
-    description="Start http.server + ngrok inside the sandbox container and return the public URL.",
+    description="Return the sandbox service URL (internal/private).",
 )
 async def get_workspace_public_url() -> dict:
-    await ensure_sandbox_exists()
-
-    # start http.server (serves /workspace)
-    await run_subprocess("docker exec -d sandbox python -m http.server 8000", shell=True)
-
-    # start ngrok
-    await run_subprocess(
-        "docker exec -d sandbox ngrok http 8000 --authtoken 32fJJe11lRDxdhY2ZVFyYDU4jzP_6MnjiP9U6X5MkkSe6ACdF --log=stdout",
-        shell=True,
-    )
-
-    # fetch public URL via ngrok's local API *inside* the container
-    cmd = "docker exec sandbox sh -c 'curl -s http://127.0.0.1:4040/api/tunnels | jq -r \".tunnels[0].public_url\"'"
-    result = await run_subprocess(cmd, shell=True)
-
-    if result.code == 0 and result.stdout and result.stdout.strip() and result.stdout.strip() != "null":
-        url = result.stdout.strip()
-        return {"is_error": False, "url": url}
-
-    return {"is_error": True, "message": result.stderr or "No public URL found"}
+    return {"is_error": False, "url": SANDBOX_BASE_URL}
 
 
 @mcp.tool(
@@ -183,36 +172,18 @@ async def get_workspace_public_url() -> dict:
     description="List the files in the sandbox workspace directory",
 )
 async def list_files() -> dict:
-    await ensure_sandbox_exists()
-
-    command = "docker exec sandbox ls /workspace -la"
-
-    try:
-        result = await run_subprocess(
-            command,
-            shell=True,
-        )
-        segments = []
-        if result.stdout:
-            segments.append({"name": "STDOUT", "text": result.stdout})
-        if result.stderr:
-            segments.append({"name": "STDERR", "text": result.stderr})
-        meta = {
-            "exit_code": result.code,
-            "truncated": result.truncated,
-            "timeout": result.timeout,
-            "command": command,
-        }
-        is_error = result.code != 0
-        if is_error:
-            meta["is_error"] = True
-        return {"segments": segments, **meta}
-    except CommandError as ce:
-        return {
-            "is_error": True,
-            "message": str(ce),
-            "command": command,
-        }
+    data = await _get("/list")
+    listing = "\n".join(
+        f"{e['type']:9} {'' if e.get('size') is None else str(e['size']).rjust(8)} {e['name']}"
+        for e in data.get("entries", [])
+    )
+    return {
+        "segments": [{"name": "STDOUT", "text": listing}],
+        "exit_code": 0,
+        "truncated": False,
+        "timeout": False,
+        "command": "remote:list",
+    }
 
 
 @mcp.tool(
@@ -227,45 +198,25 @@ async def run_command(
     shell: bool = True,
     max_output_bytes: int = 200_000,
 ) -> dict:
-    """Execute a command inside the sandbox container and return structured segments.
-
-    Returns a dict with segments list: each segment has name and text.
-    Errors return is_error True and may omit stdout if not produced.
-    """
-    await ensure_sandbox_exists()
-
-    # Use stdin to pipe the script into the container for robust multi-line support
-    docker_command = "docker exec -i sandbox sh"
-
-    try:
-        # If stdin is provided, prepend the command to it; otherwise, use command as stdin
-        script = command if not stdin else f"{command}\n{stdin}"
-        result = await run_subprocess(
-            docker_command,
-            stdin=script,
-            timeout=timeout,
-            shell=shell,
-            max_output_bytes=max_output_bytes,
-        )
-    except CommandError as ce:
-        return {
-            "is_error": True,
-            "message": str(ce),
-            "command": command,
-        }
+    res = await _post("/run", {"command": command, "stdin": stdin})
     segments = []
-    if result.stdout:
-        segments.append({"name": "STDOUT", "text": result.stdout})
-    if result.stderr:
-        segments.append({"name": "STDERR", "text": result.stderr})
+    if res.get("stdout"):
+        out = res["stdout"]
+        if len(out.encode()) > max_output_bytes:
+            out = out.encode()[:max_output_bytes].decode(errors="ignore") + "\n[TRUNCATED]"
+        segments.append({"name": "STDOUT", "text": out})
+    if res.get("stderr"):
+        err = res["stderr"]
+        if len(err.encode()) > max_output_bytes:
+            err = err.encode()[:max_output_bytes].decode(errors="ignore") + "\n[TRUNCATED]"
+        segments.append({"name": "STDERR", "text": err})
     meta = {
-        "exit_code": result.code,
-        "truncated": result.truncated,
-        "timeout": result.timeout,
+        "exit_code": res.get("exit_code", 1),
+        "truncated": any("[TRUNCATED]" in s["text"] for s in segments),
+        "timeout": False,
         "command": command,
     }
-    is_error = result.code != 0
-    if is_error:
+    if meta["exit_code"] != 0:
         meta["is_error"] = True
     return {"segments": segments, **meta}
 
@@ -275,69 +226,22 @@ async def run_command(
     description="Create or overwrite a text file with provided full content. Creates parent directories as needed.",
 )
 async def write_to_file(path: Path, content: str) -> dict:
-    """Create or overwrite a file atomically-ish.
-
-    Args:
-        path: Target file path (relative or absolute)
-        content: Entire desired file content
-    Returns:
-        Metadata including bytes_written and absolute path
-    Args Example:
-        path="~/output.txt",
-        content="Full file content here"
-    """
-    await ensure_sandbox_exists()
-
-    # Normalize potential accidental code fences
     if content.startswith("```") and content.endswith("```"):
         lines = content.splitlines()
         if len(lines) >= 2:
             inner = lines[1:-1]
             content = "\n".join(inner) + ("\n" if content.endswith("\n```") else "")
 
-    # Write the file inside the sandbox container
-    # Use /workspace as the root inside the container
-
-    # If path is absolute, use as is; if relative, prepend /workspace
-    container_path = path
-    if not os.path.isabs(container_path):
-        container_path = f"/workspace/{container_path}"
-    # Ensure parent directories exist inside the container
-    mkdir_cmd = f"mkdir -p $(dirname {quote(container_path)})"
-    # Write content using echo and redirection (handle special chars with printf)
-
-    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-    write_cmd = f"echo '{encoded}' | base64 -d > {quote(container_path)}"
-    full_cmd = f"{mkdir_cmd} && {write_cmd}"
-    docker_cmd = f"docker exec sandbox sh -c {quote(full_cmd)}"
-
-    try:
-        result = await run_subprocess(docker_cmd, shell=True)
-        if result.code != 0:
-            return {
-                "is_error": True,
-                "message": result.stderr or "Unknown error",
-                "path": path,
-            }
-        # Get file size inside container
-        stat_cmd = f"docker exec sandbox sh -c 'stat -c %s {quote(container_path)}'"
-        stat_result = await run_subprocess(stat_cmd, shell=True)
-        if stat_result.code == 0 and stat_result.stdout:
-            bytes_written = int(stat_result.stdout.strip())
-        else:
-            bytes_written = len(content.encode("utf-8"))
-        return {
-            "path": container_path,
-            "bytes_written": bytes_written,
-            "created": True,  # always True for this context
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
-    except Exception as e:
-        return {
-            "is_error": True,
-            "message": f"Failed to write file in sandbox: {e}",
-            "path": path,
-        }
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    info = await _post("/write", {"path": str(path), "content_b64": b64})
+    if info.get("is_error"):
+        return {"is_error": True, "message": info.get("message", "Unknown error"), "path": str(path)}
+    return {
+        "path": info.get("path", str(path)),
+        "bytes_written": info.get("bytes_written", len(content.encode("utf-8"))),
+        "created": info.get("created", True),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
 
 
 @mcp.tool(
@@ -345,84 +249,30 @@ async def write_to_file(path: Path, content: str) -> dict:
     description="Apply multiple search/replace edits to an existing text file. Each replacement is literal (no regex).",
 )
 async def replace_in_file(path: Path, replacements: list[dict]) -> dict:
-    """Perform targeted replacements.
-
-    Args:
-        path: File to modify
-        replacements: list of {"search": str, "replace": str}
-    Returns metadata with counts.
-    Args Example:
-        replacements=[
-            {"search": "old_text", "replace": "new_text"},
-            {"search": "another_old", "replace": "another_new"},
-        ]
-    """
-    await ensure_sandbox_exists()
-
-    container_path = path
-    if not os.path.isabs(container_path):
-        container_path = f"/workspace/{container_path}"
-
-    # Check if file exists in container
-    check_cmd = f"docker exec sandbox sh -c 'test -f {quote(container_path)}'"
-    check_result = await run_subprocess(check_cmd, shell=True)
-    if check_result.code != 0:
-        return {"is_error": True, "message": "File does not exist", "path": path}
-
-    # Read file content from container (base64 to avoid encoding issues)
-    read_cmd = f"docker exec sandbox sh -c 'base64 {quote(container_path)}'"
-    read_result = await run_subprocess(read_cmd, shell=True)
-    if read_result.code != 0 or not read_result.stdout:
-        return {
-            "is_error": True,
-            "message": f"Failed to read file: {read_result.stderr or 'Unknown error'}",
-            "path": path,
-        }
-    try:
-        original = base64.b64decode(read_result.stdout.encode("utf-8")).decode("utf-8")
-    except Exception as e:
-        return {
-            "is_error": True,
-            "message": f"Failed to decode file: {e}",
-            "path": path,
-        }
-
-    modified = original
-    applied = []
-    for idx, entry in enumerate(replacements):
-        search = entry.get("search")
-        replace = entry.get("replace", "")
-        if search is None:
-            applied.append(
-                {"index": idx, "status": "skipped", "reason": "missing search"}
-            )
-            continue
-        if search not in modified:
-            applied.append({"index": idx, "status": "not-found"})
-            continue
-        occurrences = modified.count(search)
-        modified = modified.replace(search, replace)
-        applied.append({"index": idx, "status": "replaced", "occurrences": occurrences})
-
-    changed = modified != original
-    if changed:
-        # Write back to file in container using base64
-        encoded = base64.b64encode(modified.encode("utf-8")).decode("ascii")
-        write_cmd = f"echo '{encoded}' | base64 -d > {quote(container_path)}"
-        docker_cmd = f"docker exec sandbox sh -c {quote(write_cmd)}"
-        write_result = await run_subprocess(docker_cmd, shell=True)
-        if write_result.code != 0:
-            return {
-                "is_error": True,
-                "message": f"Failed to write file: {write_result.stderr or 'Unknown error'}",
-                "path": path,
-            }
-
+    info = await _post("/replace", {"path": str(path), "replacements": replacements})
+    if info.get("is_error"):
+        return {"is_error": True, "message": info.get("message", "Unknown error"), "path": str(path)}
     return {
-        "path": container_path,
-        "changed": changed,
-        "replacements": applied,
+        "path": info["path"],
+        "changed": info["changed"],
+        "replacements": info["replacements"],
         "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@mcp.tool(
+    name="read_file",
+    title="Read File",
+    description="Return the full textual content of a sandbox file",
+)
+async def read_file(path: Path) -> dict:
+    info = await _get("/read", params={"path": str(path)})
+    if info.get("is_error"):
+        return {"is_error": True, "message": info.get("message", "Unknown error"), "path": str(path)}
+    return {
+        "path": info["path"],
+        "content": info["content"],
+        "truncated": info.get("truncated", False),
     }
 
 
@@ -431,79 +281,38 @@ async def replace_in_file(path: Path, replacements: list[dict]) -> dict:
     description="Push files in the sandbox to Github, creating a new repository first.",
 )
 async def push_files(repo_name: str = "default_name") -> dict:
-    await ensure_sandbox_exists()
-
-    # 1. Get repo name (use timestamp for uniqueness)
-    repo_name = f"sandbox-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    org = None  # Optionally set to a GitHub org
-    full_repo = repo_name if not org else f"{org}/{repo_name}"
-
-    # 2. Get GH token from special header (injected by infra)
-    headers = get_http_headers()
-    print("headers", headers)
-    gh_token = headers.get("gh-api-token").split(" ")[1]
-    print("gh-api-key", gh_token)
-
-    if not gh_token:
-        return {
-            "is_error": True,
-            "message": "Missing GitHub API key in environment (GH_API_KEY or gh-api-key)",
-        }
-
-    # 4. All commands run inside the sandbox container, in /workspace
-    cmds = []
-    # a. Init git if needed
-    cmds.append("git init -b main")
-    cmds.append("git config user.email 'sandbox@example.com'")
-    cmds.append("git config user.name 'sandbox-bot'")
-    # b. Add all files
-    cmds.append("git add .")
-    cmds.append("git commit -m 'Initial commit'")
-    # c. Create repo with gh CLI
-    cmds.append(
-        f"gh repo create {full_repo} --public --source=. --remote=origin --push --confirm"
-    )
-
-    # d. If gh CLI fails to push, try manual push
-    cmds.append("git push origin main")
-
-    # 5. Run each command, collect output
+    repo_name = repo_name or f"sandbox-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    cmds = [
+        "git init -b main",
+        "git config user.email 'sandbox@example.com'",
+        "git config user.name 'sandbox-bot'",
+        "git add .",
+        "git commit -m 'Initial commit' || echo 'nothing to commit' >&2",
+        f"gh repo create {repo_name} --public --source=. --remote=origin --push --confirm || true",
+        "git push -u origin main || true",
+    ]
     results = []
     for cmd in cmds:
-        docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' sandbox sh -c {quote(cmd)}"
-        try:
-            res = await run_subprocess(docker_cmd, shell=True)
-            results.append(
-                {
-                    "command": cmd,
-                    "code": res.code,
-                    "stdout": res.stdout,
-                    "stderr": res.stderr,
-                }
-            )
-            if res.code != 0:
-                return {
-                    "is_error": True,
-                    "message": f"Command failed: {cmd}",
-                    "results": results,
-                }
-        except CommandError as ce:
-            return {
-                "is_error": True,
-                "message": str(ce),
-                "command": cmd,
-                "results": results,
-            }
+        res = await _post("/run", {"command": cmd, "stdin": ""})
+        results.append({
+            "command": cmd,
+            "code": res.get("exit_code", 1),
+            "stdout": res.get("stdout", ""),
+            "stderr": res.get("stderr", ""),
+        })
 
-    # 6. Compose repo URL
-    repo_url = f"https://github.com/{full_repo}"
-    return {"repo": full_repo, "url": repo_url, "results": results, "is_error": False}
+    return {
+        "repo": repo_name,
+        "url": f"https://github.com/{repo_name}",
+        "results": results,
+        "is_error": any(r["code"] != 0 for r in results[-2:]),
+    }
 
-
+# ---------- entrypoint ----------
 if __name__ == "__main__":
     mcp.run(
         transport="streamable-http",
-        port=3000,
+        port=PORT,
         stateless_http=True,
-        log_level="DEBUG",  # change this if this is too verbose
+        log_level="DEBUG",
     )
