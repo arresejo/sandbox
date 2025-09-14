@@ -4,6 +4,7 @@ from command_exec import run_subprocess, CommandError
 from datetime import datetime
 from utils.init_sandbox import ensure_sandbox_exists
 from shlex import quote
+from pathlib import Path  # https://gofastmcp.com/servers/tools#paths
 import os
 
 from fastmcp.server.dependencies import get_http_headers
@@ -242,11 +243,10 @@ async def run_command(
 
 
 @mcp.tool(
-    name="write_to_file",
     title="Write File (create/overwrite)",
     description="Create or overwrite a text file with provided full content. Creates parent directories as needed.",
 )
-async def write_to_file(path: str, content: str) -> dict:
+async def write_to_file(path: Path, content: str) -> dict:
     """Create or overwrite a file atomically-ish.
 
     Args:
@@ -313,11 +313,10 @@ async def write_to_file(path: str, content: str) -> dict:
 
 
 @mcp.tool(
-    name="replace_in_file",
     title="Replace In File",
     description="Apply multiple search/replace edits to an existing text file. Each replacement is literal (no regex).",
 )
-async def replace_in_file(path: str, replacements: list[dict]) -> dict:
+async def replace_in_file(path: Path, replacements: list[dict]) -> dict:
     """Perform targeted replacements.
 
     Args:
@@ -400,11 +399,12 @@ async def replace_in_file(path: str, replacements: list[dict]) -> dict:
 
 
 @mcp.tool(
-    name="push_files",
     title="Push Files to GitHub",
     description="Push files in the sandbox to Github, creating a new repository first.",
 )
-async def push_files(repo_name="default_name") -> dict:
+async def push_files(repo_name: str = "default_name") -> dict:
+    await ensure_sandbox_exists()
+
     # 1. Get repo name (use timestamp for uniqueness)
     repo_name = f"sandbox-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     org = None  # Optionally set to a GitHub org
@@ -423,7 +423,6 @@ async def push_files(repo_name="default_name") -> dict:
         }
 
     # 4. All commands run inside the sandbox container, in /workspace
-    workdir = "/workspace"
     cmds = []
     # a. Init git if needed
     cmds.append("git init -b main")
@@ -443,7 +442,7 @@ async def push_files(repo_name="default_name") -> dict:
     # 5. Run each command, collect output
     results = []
     for cmd in cmds:
-        docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' -w {workdir} sandbox sh -c {quote(cmd)}"
+        docker_cmd = f"docker exec -e GH_TOKEN='{gh_token}' sandbox sh -c {quote(cmd)}"
         try:
             res = await run_subprocess(docker_cmd, shell=True)
             results.append(
