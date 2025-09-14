@@ -56,10 +56,7 @@ RUN set -eux; \
     # Installer ngrok binaire
     curl -sSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip -o /tmp/ngrok.zip; \
     unzip /tmp/ngrok.zip -d /usr/local/bin; \
-    rm -f /tmp/ngrok.zip; \
-    # Nettoyage APT
-    apt-get clean; \
-    rm -rf /var/lib/apt/lists/*
+    rm -f /tmp/ngrok.zip; 
 
 # Copier requirements et wheels depuis le builder et installer
 COPY requirements.txt /workspace/requirements.txt
@@ -68,12 +65,13 @@ RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir --no-index --find-links=/wheels -r /workspace/requirements.txt && \
     rm -rf /wheels
 
-# (Optionnel) Installer Node.js + npm (décommente si nécessaire)
-# RUN set -eux; \
-#     apt-get update; \
-#     apt-get install -y --no-install-recommends nodejs npm; \
-#     apt-get clean; \
-#     rm -rf /var/lib/apt/lists/*
+# Installer Node.js (version LTS récente via NodeSource)
+RUN set -eux; \
+    export NODE_MAJOR=20; \
+    curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -; \
+    apt-get install -y --no-install-recommends nodejs; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
 # Créer un utilisateur non-root
 RUN useradd --create-home --shell /bin/bash sandboxuser && \

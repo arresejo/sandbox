@@ -152,7 +152,11 @@ Return shape:
 
 ## get_workspace_public_url
 Description: Start http.server + ngrok inside the sandbox container and return the public URL. This tool allow you to expose the /workspace directory over the internet for easy file access and serving.
-Parameters: None
+
+Parameters:
+
+- `port` (optional, int): port of the server to expose publicly
+
 Return shape:
 - `url`: the public URL if successful.
 - `is_error` / `message`: present on failure.
@@ -165,7 +169,7 @@ Return shape:
     title="Get Workspace Public URL",
     description="Start http.server + ngrok inside the sandbox container and return the public URL. This tool allow you to expose the /workspace directory over the internet for easy file access and serving.",
 )
-async def get_workspace_public_url() -> dict:
+async def get_workspace_public_url(port: int = 8000) -> dict:
     await ensure_sandbox_exists()
 
     # start http.server (serves /workspace)
@@ -179,7 +183,7 @@ async def get_workspace_public_url() -> dict:
         return {"is_error": True, "message": "Missing NGROK_AUTHTOKEN in environment"}
 
     await run_subprocess(
-        f"docker exec -d sandbox ngrok http 8000 --authtoken {ngrok_token} --log=stdout",
+        f"docker exec -d sandbox ngrok http {port} --authtoken {ngrok_token} --log=stdout",
         shell=True,
     )
 
