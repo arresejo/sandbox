@@ -9,6 +9,10 @@ import os
 
 from fastmcp.server.dependencies import get_http_headers
 
+# Load environment variables from .env if present
+from dotenv import load_dotenv
+load_dotenv()
+
 # Use base64 to avoid shell escaping issues
 import base64
 
@@ -146,6 +150,12 @@ Return shape:
 - `stdout`: Output from the deployment process.
 - `is_error` / `message` / `stderr` / `exit_code`: present on failure.
 
+## get_workspace_public_url
+Description: Start http.server + ngrok inside the sandbox container and return the public URL. This tool allow you to expose the /workspace directory over the internet for easy file access and serving.
+Parameters: None
+Return shape:
+- `url`: the public URL if successful.
+- `is_error` / `message`: present on failure.
 """,
 )
 
@@ -153,7 +163,7 @@ Return shape:
 @mcp.tool(
     name="get_workspace_public_url",
     title="Get Workspace Public URL",
-    description="Start http.server + ngrok inside the sandbox container and return the public URL.",
+    description="Start http.server + ngrok inside the sandbox container and return the public URL. This tool allow you to expose the /workspace directory over the internet for easy file access and serving.",
 )
 async def get_workspace_public_url() -> dict:
     await ensure_sandbox_exists()
@@ -161,9 +171,13 @@ async def get_workspace_public_url() -> dict:
     # start http.server (serves /workspace)
     await run_subprocess("docker exec -d sandbox python -m http.server 8000", shell=True)
 
-    # start ngrok
+    # start ngrok using auth token from environment
+    ngrok_token = os.getenv("NGROK_AUTHTOKEN")
+    if not ngrok_token:
+        return {"is_error": True, "message": "Missing NGROK_AUTHTOKEN in environment"}
+
     await run_subprocess(
-        "docker exec -d sandbox ngrok http 8000 --authtoken 32fJJe11lRDxdhY2ZVFyYDU4jzP_6MnjiP9U6X5MkkSe6ACdF --log=stdout",
+        f"docker exec -d sandbox ngrok http 8000 --authtoken {ngrok_token} --log=stdout",
         shell=True,
     )
 
